@@ -1,0 +1,38 @@
+{
+    "Dependancies": 
+    [
+        "MBUtility",
+        "MBParsing",
+        "MBTCP"
+    ],
+    "ExtraIncludes": 
+    [
+
+    ],
+    "Language": "C++",
+    "Standard": "C++17",
+    "Targets": 
+    {
+        "MBLisp": 
+        {
+            "OutputName": "MBTCP",
+            "Sources": 
+            [
+                "/OverlayProtocol.cpp",
+                "/Connection.cpp",
+                "/MBChat_Main.cpp"
+            ],
+            "TargetType": "Executable"
+        },
+        "Lib": 
+        {
+            "OutputName": "MBTCP",
+            "Sources": 
+            [
+                "/OverlayProtocol.cpp",
+                "/Connection.cpp"
+            ],
+            "TargetType": "Library"
+        }
+    }
+}

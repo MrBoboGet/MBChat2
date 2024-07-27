@@ -1,0 +1,7 @@
+{
+	"PacketName":"MBChat2",
+    "PacketType":"C++",
+	"Attributes":[],
+    "SubPackets":[],
+    "Dependancies":["MBUtility","MBParsing","MBTCP"]
+}
