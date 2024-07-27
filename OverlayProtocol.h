@@ -9,6 +9,8 @@
 
 namespace MBChat2
 {
+    using MBParsing::operator&;
+
     enum class MessageType : uint32_t
     {
         Handshake = 0,
@@ -36,6 +38,13 @@ namespace MBChat2
     {
         ExtensionType Type = ExtensionType::Optional;
         uint16_t Length = 0;
+
+        template<typename T>
+        friend void Parse(T& Stream,Extension& Value,uint16_t Version)
+        {
+            Stream & Value.Type;
+            Stream & Value.Length;
+        }
     };
 
     enum class ContentType : uint32_t
@@ -52,7 +61,7 @@ namespace MBChat2
         std::string Content;
 
         template<typename T>
-        friend void Parse(T& Stream,Hash&& Value,uint16_t Version)
+        friend void Parse(T& Stream,Hash& Value,uint16_t Version)
         {
             Stream & Value.Content;
         }
@@ -61,7 +70,7 @@ namespace MBChat2
     {
         std::string Content;
         template<typename T>
-        friend void Parse(T& Stream,Key&& Value,uint16_t Version)
+        friend void Parse(T& Stream,Key& Value,uint16_t Version)
         {
             Stream & Value.Content;
         }
@@ -70,7 +79,7 @@ namespace MBChat2
     {
         std::string Content;
         template<typename T>
-        friend void Parse(T& Stream,Signature&& Value,uint16_t Version)
+        friend void Parse(T& Stream,Signature& Value,uint16_t Version)
         {
             Stream & Value.Content;
         }
@@ -106,7 +115,7 @@ namespace MBChat2
 
 
         template<typename T>
-        friend void Parse(T& Stream,ResourceHeader&& Value,uint16_t Version)
+        friend void Parse(T& Stream,ResourceHeader& Value,uint16_t Version)
         {
             Stream & Value.ContentType;
             Stream & Value.UpType;
@@ -131,6 +140,13 @@ namespace MBChat2
     {
         bool PersistentIP = false;
         uint16_t ListeningPort = 0;
+
+        template<typename T>
+        friend void Parse(T& Stream,ConnectionMetadata& Value,uint16_t Version)
+        {
+            Stream & Value.PersistentIP;
+            Stream & Value.ListeningPort;
+        }
     };
     
     //Messages
@@ -141,18 +157,18 @@ namespace MBChat2
         std::vector<Extension> Extensions;
 
         template<typename T>
-        friend void Parse(T& Stream,Handshake&& Value,uint16_t Version)
+        friend void Parse(T& Stream,Handshake& Value,uint16_t Version)
         {
             Stream & Value.Nick;
             Parse(Stream,Value.ConnectionInfo,Version);
-            Stream & Value.Extensions;
+            Parse(Stream,Value.Extensions,Version);
         }
     };
     struct Publish
     {
         ResourceHeader Header;
         template<typename T>
-        friend void Parse(T& Stream,Publish&& Value,uint16_t Version)
+        friend void Parse(T& Stream,Publish& Value,uint16_t Version)
         {
             Parse(Stream,Value.Header,Version);
         }
@@ -162,17 +178,17 @@ namespace MBChat2
         Hash DatabaseHash;
         Hash ResourceHash;
         template<typename T>
-        friend void Parse(T& Stream,GetHeader&& Value,uint16_t Version)
+        friend void Parse(T& Stream,GetHeader& Value,uint16_t Version)
         {
             Parse(Stream,Value.DatabaseHash,Version);
             Parse(Stream,Value.ResourceHash,Version);
         }
     };
-    struct Header
+    struct HeaderMessage
     {
         ResourceHeader Header;
         template<typename T>
-        friend void Parse(T& Stream,struct Header&& Value,uint16_t Version)
+        friend void Parse(T& Stream,HeaderMessage& Value,uint16_t Version)
         {
             Parse(Stream,Value.Header,Version);
         }
@@ -182,7 +198,7 @@ namespace MBChat2
         Hash DatabaseHash;
         Hash ResourceHash;
         template<typename T>
-        friend void Parse(T& Stream,GetContent&& Value,uint16_t Version)
+        friend void Parse(T& Stream,GetContent& Value,uint16_t Version)
         {
             Parse(Stream,Value.DatabaseHash,Version);
             Parse(Stream,Value.ResourceHash,Version);
@@ -224,10 +240,10 @@ namespace MBChat2
     };
     //Messages
 
-    typedef MBUtility::StaticVariant<Handshake,Publish,GetHeader,Header> MessageContent;
+    typedef MBUtility::StaticVariant<Handshake,Publish,GetHeader,HeaderMessage> MessageContent;
    
     template<typename T>
-    void Parse(T& Stream,MessageType Type,MessageContent&& Value,uint16_t Version)
+    void Parse(T& Stream,MessageType Type,MessageContent& Value,uint16_t Version)
     {
         if(Type == MessageType::Handshake)
         {
@@ -243,17 +259,17 @@ namespace MBChat2
         }
         else if(Type == MessageType::Header)
         {
-            Parse(Stream,Value.GetOrAssign<Header>(),Version);
+            Parse(Stream,Value.GetOrAssign<HeaderMessage>(),Version);
         }
     }
     template<typename T,typename V>
-    void Parse(T& Stream,std::vector<V>&& Value,uint16_t Version)
+    void Parse(T& Stream,std::vector<V>& Value,uint16_t Version)
     {
         if constexpr(MBParsing::Writing<T>())
         {
             uint16_t Size = Value.size();
             Stream & Size;
-            for(auto const& Elem : Value)
+            for(auto& Elem : Value)
             {
                 Parse(Stream,Elem,Version);
             }
@@ -292,7 +308,7 @@ namespace MBChat2
         //    Parse(Stream,Rhs.Type,Rhs.Content);
         //}
         template<typename T>
-        friend void Parse(T& Stream,Message&& Value)
+        friend void Parse(T& Stream,Message& Value)
         {
             Stream & Value.Version;
             Stream & Value.Type;

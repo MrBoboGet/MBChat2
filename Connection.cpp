@@ -2,6 +2,10 @@
 
 namespace MBChat2
 {
+    bool Connection::p_VerifyAuthenticity(State const& SharedState,Message const& NewMessage)
+    {
+        return true;
+    }
     void Connection::p_ReadThread(std::shared_ptr<State> State)
     {
         try
