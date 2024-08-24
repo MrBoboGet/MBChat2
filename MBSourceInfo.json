@@ -3,6 +3,9 @@
     [
         "MBUtility",
         "MBParsing",
+        "MBTUI",
+        "MrBoboSockets",
+        "MrBoboDatabase",
         "MBTCP"
     ],
     "ExtraIncludes": 
@@ -15,10 +18,11 @@
     {
         "MBLisp": 
         {
-            "OutputName": "MBTCP",
+            "OutputName": "MBChat2",
             "Sources": 
             [
                 "/OverlayProtocol.cpp",
+                "/Client.cpp",
                 "/Connection.cpp",
                 "/MBChat_Main.cpp"
             ],
@@ -26,10 +30,11 @@
         },
         "Lib": 
         {
-            "OutputName": "MBTCP",
+            "OutputName": "MBChat2",
             "Sources": 
             [
                 "/OverlayProtocol.cpp",
+                "/Client.cpp",
                 "/Connection.cpp"
             ],
             "TargetType": "Library"

@@ -26,6 +26,12 @@ namespace MBChat2
         RPC,
         Close,
         RPCResponse,
+
+        //Kademlia messages
+        Store,
+        FindNode,
+        FindValue,
+        Ping
     };
 
 
@@ -58,7 +64,7 @@ namespace MBChat2
 
     struct Hash
     {
-        std::string Content;
+        std::vector<uint8_t> Content;
 
         template<typename T>
         friend void Parse(T& Stream,Hash& Value,uint16_t Version)
@@ -92,26 +98,25 @@ namespace MBChat2
 
     struct DatabaseDefinition
     {
+        Hash ID;
         uint64_t Timestamp = 0;
         uint64_t MaxMessageSize = -1;
-        std::vector<Key> Authors;
         std::vector<Hash> ForkedDatabase;
-        std::vector<Hash> Participants;
-        std::vector<Signature> AuthorSignatures;
+        std::vector<Key> Participants;
     };
 
     struct ResourceHeader
     {
+        Hash HeaderHash;
         ContentType ContentType = ContentType::Text;
         UploadType UpType = UploadType::New;
         uint64_t TimeStamp = 0;
-        uint64_t ResourceSize = 0;
+        uint64_t ContentSize = 0;
         Hash OriginalDatabaseHash;
         Hash ParentHash;
         Hash ContentHash;
         Key Uploader;
         Signature Sig;
-        Hash HeaderHash;
 
 
         template<typename T>
@@ -120,7 +125,7 @@ namespace MBChat2
             Stream & Value.ContentType;
             Stream & Value.UpType;
             Stream & Value.TimeStamp;
-            Stream & Value.ResourceSize;
+            Stream & Value.ContentSize;
 
             Parse(Stream,Value.OriginalDatabaseHash,Version);
             Parse(Stream,Value.ParentHash,Version);
@@ -136,6 +141,15 @@ namespace MBChat2
         Key ID;
     };
 
+
+    struct PeerInfo
+    {
+        Hash ID;
+        std::string Nick;
+        bool PersistentIP = false;
+        uint32_t IP = 0;
+        uint16_t ListeningPort = 0;
+    };
     struct ConnectionMetadata
     {
         bool PersistentIP = false;
@@ -148,8 +162,39 @@ namespace MBChat2
             Stream & Value.ListeningPort;
         }
     };
+    struct ResourceContent
+    {
+        Key Uploader;
+        ContentType ContentType = ContentType::Text;
+        UploadType UpType = UploadType::New;
+        Hash ParentHash;
+        std::string Content;
+    };
+    struct PublishableResourceHeader
+    {
+        Key Uploader;
+        ContentType ContentType = ContentType::Text;
+        UploadType UpType = UploadType::New;
+        Hash DatabaseHash;
+        Hash ParentHash;
+        Hash ContentHash;
+        uint64_t ResourceSize = 0;
+    };
     
     //Messages
+    struct FindValue
+    {
+           
+    };
+    struct FindNode
+    {
+           
+    };
+    struct Store
+    {
+           
+    };
+    
     struct Handshake
     {
         std::string Nick;
@@ -306,9 +351,8 @@ namespace MBChat2
         //    Stream & Rhs.MessageLength;
         //    Stream & Rhs.Signature;
         //    Parse(Stream,Rhs.Type,Rhs.Content);
-        //}
         template<typename T>
-        friend void Parse(T& Stream,Message& Value)
+        friend void ParseHeader(T& Stream,Message& Value)
         {
             Stream & Value.Version;
             Stream & Value.Type;
@@ -316,11 +360,24 @@ namespace MBChat2
             Stream & Value.ResponseID;
             Stream & Value.MessageLength;
             Stream & Value.Signature;
+        }
+        template<typename T>
+        friend void ParseBody(T& Stream,Message& Value)
+        {
             Parse(Stream,Value.Type,Value.Content,Value.Version);
         }
+        template<typename T>
+        friend void Parse(T& Stream,Message& Value)
+        {
+            ParseHeader(Stream,Value);
+            ParseBody(Stream,Value);
+        }
+        
 
         //void ReadHeader(MBUtility::IndeterminateInputStream& InputStream);
+        void ReadMessageHeader(MBUtility::IndeterminateInputStream& InputStream);
         void ReadMessage(MBUtility::IndeterminateInputStream& InputStream);
+        void ReadBody(MBUtility::IndeterminateInputStream& InputStream);
         void WriteMessage(MBUtility::MBOctetOutputStream& OutStream);
         MessageContent Content;
     };

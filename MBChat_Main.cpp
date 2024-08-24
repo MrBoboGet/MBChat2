@@ -1,8 +1,9 @@
-
+#include "Client.h"
 
 
 
 int main(int argc, const char** argv)
 {
-    return 0;   
+    MBChat2::Client Client;
+    return Client.Run();
 }
