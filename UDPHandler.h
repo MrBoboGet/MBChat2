@@ -315,6 +315,8 @@ namespace MBChat2
         //std::unordered_map<uint32_t,std::uno
     public:
 
+        UDPHandler();
+        
         template<typename MessageType>
         std::enable_if_t<std::is_base_of_v<UDPNotification_,MessageType>> SendNotification(PeerInfo Peer,MessageType Message,float Timeout = 5)
         {

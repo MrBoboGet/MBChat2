@@ -14,6 +14,7 @@ namespace MBChat2
 
     class Client
     {
+        std::mutex m_InternalsMutex;
         MBCLI::WindowManager m_TopWindow;
         MBTUI::Layerer m_TopLayerer;
 
@@ -31,13 +32,53 @@ namespace MBChat2
         //MBCL
         std::shared_ptr<MBDB::MrBoboDatabase> m_LocalDB;
 
-
-        std::unordered_map<std::string,std::vector<DBVisualiser>> m_ActiveVisualiser;
-
-        std::unique_ptr<ConnectionManager> m_ConnectionManager;
+        
+        struct DBVisualiserInfo
+        {
+            std::shared_ptr<DBConnection> Connection;
+            std::vector<std::unique_ptr<DBVisualiser>> Visualiser;
+        };
 
         
+        std::unordered_map<ID,DBVisualiserInfo> m_ActiveVisualiser;
 
+        ID m_LocalID;
+
+        ID m_VisualisedDB;
+        std::shared_ptr<ConnectionManager> m_ConnectionManager;
+        std::shared_ptr<MBDB::MrBoboDatabase> m_Database;
+
+
+
+        class DBWindow : public MBCLI::Window
+        {
+            Client* m_AssociatedClient = nullptr;
+
+            MBCLI::Window* p_GetActiveWindow();
+        public:   
+            DBWindow(Client* AssociatedClient)
+            {
+                m_AssociatedClient = AssociatedClient;   
+            }
+            virtual bool Updated();
+            virtual void HandleInput(MBCLI::ConsoleInput const& Input);
+            virtual void SetDimensions(MBCLI::Dimensions NewDimensions);
+            virtual void SetFocus(bool IsFocused);
+            virtual MBCLI::CursorInfo GetCursorInfo();
+            virtual MBCLI::TerminalWindowBuffer GetBuffer();
+        };
+
+        static DatabaseDefinition p_CreateChatDB(ID const& LocalID,ID const& PeerID);
+
+        
+        void p_StartChat(ID const& PeerID);
+        void p_DisplayError(std::string const& ErrorMessage);
+
+        void p_AddVisualiser(ID const& DatabaseID);
+        void p_ResourceRecievedHandler(ResourceHeader const& Header);
+        void p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response);
+
+        std::vector<std::string> p_TokenizeCommand(std::string const& NewCommand);
         void p_HandleCommandString(std::string const& NewCommand);
         void p_HandleEvent(MBCLI::TTYEvent const& NewInput);
         void p_SetNewVisualiserWindow(std::shared_ptr<DBVisualiser> Visualiser);

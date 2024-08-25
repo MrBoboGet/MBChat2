@@ -2,6 +2,11 @@
 
 namespace MBChat2
 {
+    UDPHandler::UDPHandler()
+        : m_Socket(0,0,0)
+    {
+        m_Socket.Bind(0);//find some good candidate port
+    }
     void UDPHandler::p_SendMessage(StoredMessage const& MessageToSend)
     {
         m_Socket.UDPSendData(MessageToSend.SerializedContent.data(),MessageToSend.SerializedContent.size(),MessageToSend.IP,MessageToSend.Port);

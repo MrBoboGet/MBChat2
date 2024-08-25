@@ -27,24 +27,35 @@ namespace MBChat2
         uint16_t PeerPort = 0;
         uint16_t LocalPort = 0;
     };
-    typedef std::function<void(Message const&)> MessageCallback;
-    typedef std::function<void(ResourceHeader const&)> ResourceCallback;
+    class Connection;
+    typedef MBUtility::MOFunction<void(PeerInfo const&, Message const&)> MessageCallback;
+    typedef MBUtility::MOFunction<void(ResourceHeader const&)> ResourceCallback;
+    typedef MBUtility::MOFunction<void(PeerInfo const&,MBParsing::JSONObject,MBUtility::Promise<MBParsing::JSONObject>)> RPCHandler;
+    typedef MBUtility::MOFunction<void (MBUtility::MBOctetOutputStream&)> StreamedResponseHandler;
     class Connection
     {
-        typedef std::function<bool(MBUtility::IndeterminateInputStream&)> StreamedHandler;
-        typedef MBUtility::StaticVariant<MessageCallback,StreamedHandler> 
+        typedef MBUtility::MOFunction<bool(MBUtility::IndeterminateInputStream&)> StreamedHandler;
+        typedef MBUtility::StaticVariant<std::monostate,MessageCallback,StreamedHandler> 
             ResponseHandler;
+
+
+        struct StreamedResponseMessage
+        {
+            MessageHeader Header;
+            StreamedResponseHandler Handler;
+        };
+
         struct QueuedMessage
         {
-            Message MessageToSend;
+            MBUtility::StaticVariant<Message,StreamedResponseMessage> MessageToSend;
             ResponseHandler ResponseCallback;
         };
 
         struct State
         {
-            ConnectionParameters Peer;
+            PeerInfo Peer;
 
-            MBTCP::MBTCP Transport;
+            std::unique_ptr<MBTCP::MBTCP> Transport;
             std::atomic<bool> Stopping;
             std::thread ReadThread;
             std::thread SendThread;
@@ -52,7 +63,7 @@ namespace MBChat2
             std::atomic<uint16_t> Version = 0;
 
             //Not changed after they have been set by the constructor
-            std::function<void(ConnectionParameters const&)> CloseHandler;
+            MBUtility::MOFunction<void(PeerInfo const&)> CloseHandler;
             MessageCallback GenericMessageHandler;
 
             std::mutex SendMutex;
@@ -69,7 +80,11 @@ namespace MBChat2
     public:
         ~Connection();
 
-        Connection(ConnectionParameters Peer,MessageCallback MessageHandler,std::function<void(ConnectionParameters const&)> QuitHandler);
+        Connection(ConnectionParameters Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
+
+
+        void SendResponse(MessageHeader const& RecievedMessage,Message Response);
+        void SendStreamedResponse(MessageHeader const& RecievedMessage,MessageType Type,StreamedResponseHandler Handler);
 
         void SendMessage(Message MessageToSend,MessageCallback Callback);
 
@@ -78,11 +93,11 @@ namespace MBChat2
         {
             std::lock_guard Lock(m_SharedState->SendMutex);
             QueuedMessage& NewMessage = m_SharedState->QueuedMessages.emplace_back();
-            Message RawMessage;
-            RawMessage.MessageID = m_SharedState->NextSendID.fetch_add(1);
-            RawMessage.ResponseID = 0;
-            NewMessage.MessageToSend.Content = std::move(MessageToSend);
-            NewMessage.ResponseCallback = [Func=std::move(Func),State=m_SharedState](MBUtility::IndeterminateInputStream& StreamReader)
+            Message& RawMessage = NewMessage.MessageToSend.GetOrAssign<Message>();
+            RawMessage.Header.MessageID = m_SharedState->NextSendID.fetch_add(1);
+            RawMessage.Header.ResponseID = 0;
+            RawMessage.Content = std::move(MessageToSend);
+            NewMessage.ResponseCallback =  StreamedHandler([Func=std::move(Func),State=m_SharedState](MBUtility::IndeterminateInputStream& StreamReader) mutable
                 {
                     MessageType NewMessage;
                     uint16_t Size = 0;
@@ -102,7 +117,7 @@ namespace MBChat2
                         return false;
                     }
                     return true;
-                };
+                });
             m_SharedState->SendConditional.notify_one();
         }
 
@@ -113,8 +128,7 @@ namespace MBChat2
 
     struct  IDParameters
     {
-        std::string Nick;
-        std::string PrivateKey;
+        ID LocalID;
     };
 
     struct ListenParameters
@@ -123,10 +137,10 @@ namespace MBChat2
 
     };
 
-    typedef std::vector<uint8_t> ID;
 
     ID Distance(ID const& Lhs,ID const& Rhs);
     std::string IDToString(ID const& IDToConvert);
+    ID StringToID(std::string const& StringToConvert);
     std::string BlobToString(ID const& IDToConvert);
 
 
@@ -311,9 +325,9 @@ namespace MBChat2
             }
 
             template<typename... Args>
-            std::function<void(Args...)> MakeCallback()
+            MBUtility::MOFunction<void(Args...)> MakeCallback()
             {
-                return [This=this->shared_from_this()](Args... Arguments)
+                return [This=this->shared_from_this()](Args... Arguments) mutable
                 {
                     (*This)(std::forward<Args>(Arguments)...);
                 };
@@ -327,8 +341,8 @@ namespace MBChat2
             Hash HostID;
             PeerInfo HostInfo;
             KademliaTree Peers;
-            std::unordered_map<std::string,std::shared_ptr<Connection>> ActiveConnections;
-            std::unordered_map<std::string,std::unordered_set<PeerInfo>> PeerSubscriptions;
+            std::unordered_map<ID,std::shared_ptr<Connection>> ActiveConnections;
+            std::unordered_map<ID,std::unordered_set<PeerInfo>> PeerSubscriptions;
 
             //not needing mutex
             MBDB::MrBoboDatabase DB;
@@ -336,6 +350,7 @@ namespace MBChat2
             UDPHandler UDP;
 
             ResourceCallback ResourceRecievedCallback;
+            RPCHandler RPCCallback;
 
             std::vector<PeerInfo> GetClosestPeers(ID const&,int k);
             std::vector<PeerInfo> GetClosestPeers(ID const& TargetID,ID const& DatabaseID,int k);
@@ -363,17 +378,23 @@ namespace MBChat2
                 Task->Init();
             }
             template<typename ReturnType,typename... ArgTypes>
-            std::function<ReturnType(ArgTypes...)> MakeCallback(ReturnType (SharedState::* Func)(ArgTypes...))
+            MBUtility::MOFunction<ReturnType(ArgTypes...)> MakeCallback(ReturnType (SharedState::* Func)(ArgTypes...))
             {
                 return [Func=Func,Obj = shared_from_this()](ArgTypes... Args) {return (*Obj).*Func(Args...);};
+            }
+
+            SharedState(std::string const& DatabasePath)
+                : DB(DatabasePath,MBDB::DBOpenOptions::ReadWrite)
+            {
+                   
             }
         };
 
 
         class InitializeConnection : public Task<InitializeConnection>
         {
-            typedef std::function<void(std::shared_ptr<Connection>)> ConnectionCallback;
-            typedef std::function<void(PeerInfo const& )> ConnectionFailedCallback;
+            typedef MBUtility::MOFunction<void(std::shared_ptr<Connection>)> ConnectionCallback;
+            typedef MBUtility::MOFunction<void(PeerInfo const& )> ConnectionFailedCallback;
             InitConnection m_Request;
             PeerInfo m_TargetPeer;
             std::shared_ptr<Connection> m_ResultConnection;
@@ -415,15 +436,21 @@ namespace MBChat2
                     return; 
                 }
                 ConnectionParameters Params;
-                Params.IP = m_Request.HostInfo.IP;
-                Params.PeerPort = m_Request.HostInfo.ListeningPort;
+                Params.IP = m_TargetPeer.IP;
+                Params.PeerPort = m_TargetPeer.ListeningPort;
                 Params.LocalPort = m_Request.HostPort;
                 auto NewConnection = std::make_shared<Connection>(std::move(Params),GetState().GetTCPMessageHandler(),
-                            [ID=IDToString(m_Request.HostInfo.ID.Content),ThisTask=shared_from_this()](ConnectionParameters const& Params){
+                            [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
                                 std::lock_guard Lock(ThisTask->GetState().StateMutex);
-                                ThisTask->GetState().ActiveConnections.erase(ThisTask->GetState().ActiveConnections.find(ID));
+                                ThisTask->GetState().
+                                ActiveConnections.erase(ThisTask->GetState().ActiveConnections.find(ID));
                             });
-                GetState().ActiveConnections[IDToString(m_Request.HostInfo.ID.Content)] = NewConnection;
+
+
+                {
+                    std::lock_guard StateLock = std::lock_guard(GetState().StateMutex);
+                    GetState().ActiveConnections[m_Request.HostInfo.ID.Content] = NewConnection;
+                }
                 m_ConnectionSucceedCallback(NewConnection);
             }
         };
@@ -494,7 +521,7 @@ namespace MBChat2
         };
         class FindClosestPeers : public Task<FindClosestPeers>
         {
-            typedef std::function<void(std::vector<PeerInfo> const&)> PeersFoundCallback;
+            typedef MBUtility::MOFunction<void(std::vector<PeerInfo> const&)> PeersFoundCallback;
             int k = 30;
             size_t ReplicationCount = 3;
             FindPeerRequest m_PeerRequest;
@@ -524,6 +551,11 @@ namespace MBChat2
             {
                 PeerRequest.PeerID.Content = DBID;
                 m_PeerRequest = std::move(PeerRequest);
+            }
+            FindClosestPeers(ID const& TargetID,PeersFoundCallback PeersFound)
+                : m_MinHeapSorter(TargetID,false),m_IDSorter(TargetID)
+            {
+                m_PeerRequest.PeerID.Content = TargetID;
             }
             void Init()
             {
@@ -597,16 +629,26 @@ namespace MBChat2
 
         std::shared_ptr<SharedState> m_State;
     public:
-        ConnectionManager(IDParameters Params,ResourceCallback Callback);
+        ConnectionManager(IDParameters Params,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback);
 
 
-        std::shared_ptr<Connection> EstablishDirectConnection(PeerInfo const& Peer);
+        //MBUtility::Future<std::shared_ptr<Connection>> 
+        //    EstablishDirectConnection(ID const& PeerID);
 
         void AddConnections(std::vector<PeerInfo> const& Peers);
+        void AddConnection(PeerInfo Peer);
         void PublishMessage(PublishableResourceHeader const& Message);
+        //
+
+        MBUtility::Future<MBParsing::JSONObject> SendPeerRPC(ID const& PeerID,
+                MBParsing::JSONObject ObjectToSend);
+       
+        void AddDBPeer(ID const& PeerID,ID const& DatabaseID);
+        void CreateDB(DatabaseDefinition const& Definition);
 
         //called once after all of the initial parameters are set
         void JoinNetwork();
         void JoinDB(ID const& DBID);
     };
 }
+

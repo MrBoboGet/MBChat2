@@ -7,10 +7,14 @@
 #include <MBParsing/MBParsing.h>
 #include <MBParsing/StreamSerialize.h>
 
+
+#include <MBCrypto/MBCrypto.h>
+
 namespace MBChat2
 {
     using MBParsing::operator&;
 
+    typedef std::vector<uint8_t> ID;
     enum class MessageType : uint32_t
     {
         Handshake = 0,
@@ -73,6 +77,12 @@ namespace MBChat2
     {
         std::vector<uint8_t> Content;
 
+        Hash() = default;
+        Hash(ID HashContent)
+        {
+            Content = std::move(HashContent);
+        }
+
         bool operator==(Hash const& rhs) const
         {
             return Content == rhs.Content;
@@ -97,7 +107,13 @@ namespace MBChat2
         template<typename T>
         friend void operator&(T& Stream,Hash& Rhs)
         {
-            Stream & Rhs;
+            Stream & Rhs.Content;
+        }
+
+
+        bool operator<(Hash const& rhs) const
+        {
+            return Content < rhs.Content;   
         }
     };
     struct Key
@@ -126,11 +142,22 @@ namespace MBChat2
 
     struct DatabaseDefinition
     {
-        Hash ID;
+        Hash DatabaseID;
         uint64_t Timestamp = 0;
-        uint64_t MaxMessageSize = -1;
         std::vector<Hash> ForkedDatabase;
-        std::vector<Key> Participants;
+        std::vector<Hash> Participants;
+
+        void CalculateHash()
+        {
+            std::string OutString;
+            MBUtility::MBStringOutputStream OutStream(OutString);
+            OutStream & Timestamp;
+            OutStream & ForkedDatabase;
+            OutStream & Participants;
+            auto Hash = MBCrypto::HashData(OutString,MBCrypto::HashFunction::SHA256);
+            DatabaseID.Content.resize(Hash.size());
+            std::memcpy(DatabaseID.Content.data(),Hash.data(),Hash.size());
+        }
     };
 
     struct ResourceHeader
@@ -143,7 +170,7 @@ namespace MBChat2
         Hash OriginalDatabaseHash;
         Hash ParentHash;
         Hash ContentHash;
-        Key Uploader;
+        Hash Uploader;
         Signature Sig;
 
 
@@ -387,9 +414,14 @@ namespace MBChat2
     {
         std::vector<Peer> Result;
     };
+
+    struct JSONRPC
+    {
+        MBParsing::JSONObject Object;
+    };
     //Messages
 
-    typedef MBUtility::StaticVariant<GetResources> MessageContent;
+    typedef MBUtility::StaticVariant<JSONRPC,GetResources> MessageContent;
    
     template<typename T>
     void Parse(T& Stream,MessageType Type,MessageContent& Value,uint16_t Version)
@@ -422,8 +454,7 @@ namespace MBChat2
             }
         }
     }
-
-    struct Message 
+    struct MessageHeader
     {
         uint16_t Version = 0;
         MessageType Type = MessageType::Handshake;
@@ -432,6 +463,20 @@ namespace MBChat2
         uint64_t MessageLength = 0;
 
 
+        template<typename T>
+        friend void operator&(T& Stream,MessageHeader& Header)
+        {
+            Stream & Header.Version;
+            Stream & Header.Type;
+            Stream & Header.MessageID;
+            Stream & Header.ResponseID;
+            Stream & Header.MessageLength;
+        }
+    };
+    struct Message 
+    {
+
+        MessageHeader Header;
         //template<typename T>
         //void friend operator&(T& Stream,Message&& Rhs)
         //{
@@ -445,16 +490,12 @@ namespace MBChat2
         template<typename T>
         friend void ParseHeader(T& Stream,Message& Value)
         {
-            Stream & Value.Version;
-            Stream & Value.Type;
-            Stream & Value.MessageID;
-            Stream & Value.ResponseID;
-            Stream & Value.MessageLength;
+            Stream & Value.Header;
         }
         template<typename T>
         friend void ParseBody(T& Stream,Message& Value)
         {
-            Parse(Stream,Value.Type,Value.Content,Value.Version);
+            Parse(Stream,Value.Header.Type,Value.Content,Value.Header.Version);
         }
         template<typename T>
         friend void Parse(T& Stream,Message& Value)
@@ -479,5 +520,14 @@ struct std::hash<MBChat2::PeerInfo>
     size_t operator()(MBChat2::PeerInfo const& p) const
     {
         return std::hash<uint32_t>()(p.IP);
+    }
+};
+template<>
+struct std::hash<MBChat2::ID>
+{
+    size_t operator()(MBChat2::ID const& ID) const
+    {
+        return std::hash<std::string_view>()(std::string_view((const char*) ID.data(),
+                    ID.size()));
     }
 };
