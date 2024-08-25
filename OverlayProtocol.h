@@ -27,6 +27,7 @@ namespace MBChat2
         Close,
         RPCResponse,
 
+        GetResources,
         //Kademlia messages
         Store,
         FindNode,
@@ -34,6 +35,12 @@ namespace MBChat2
         Ping
     };
 
+
+    template<MessageType Type>
+    struct MessageBase
+    {
+        static constexpr MessageType type = Type;
+    };
 
     enum class ExtensionType
     {
@@ -66,10 +73,31 @@ namespace MBChat2
     {
         std::vector<uint8_t> Content;
 
+        bool operator==(Hash const& rhs) const
+        {
+            return Content == rhs.Content;
+        }
+
+        uint64_t SerializedSize()
+        {
+            uint64_t ReturnValue = 2+Content.size();
+            return ReturnValue;
+        }
+
         template<typename T>
         friend void Parse(T& Stream,Hash& Value,uint16_t Version)
         {
             Stream & Value.Content;
+        }
+        template<typename T>
+        friend void Parse(T& Stream,Hash& Value)
+        {
+            Stream & Value.Content;
+        }
+        template<typename T>
+        friend void operator&(T& Stream,Hash& Rhs)
+        {
+            Stream & Rhs;
         }
     };
     struct Key
@@ -134,6 +162,11 @@ namespace MBChat2
             Parse(Stream,Value.Sig,Version);
             Parse(Stream,Value.HeaderHash,Version);
         }
+        template<typename T>
+        friend void Parse(T& Stream,ResourceHeader& Value)
+        {
+            Parse(Stream,Value,0);
+        }
     };
 
     struct Peer
@@ -149,6 +182,30 @@ namespace MBChat2
         bool PersistentIP = false;
         uint32_t IP = 0;
         uint16_t ListeningPort = 0;
+        PeerInfo() = default;
+        PeerInfo( PeerInfo const& ) = default;
+        PeerInfo( PeerInfo && ) noexcept = default;
+        PeerInfo& operator=(PeerInfo const&) = default;
+        PeerInfo& operator=(PeerInfo&&) noexcept = default;
+        
+        bool operator==(PeerInfo const& rhs) const
+        {
+            return std::tie(ID,Nick,PersistentIP,IP,ListeningPort) == std::tie(rhs.ID,rhs.Nick,rhs.PersistentIP,rhs.IP,rhs.ListeningPort);   
+        }
+        template<typename T>
+        friend void Parse(T& Stream,PeerInfo& Value)
+        {
+            Parse(Stream,Value.ID);
+            Stream & Value.Nick;
+            Stream & Value.PersistentIP;
+            Stream & Value.IP;
+            Stream & Value.ListeningPort;
+        }
+        template<typename T>
+        friend void operator&(T& Stream,PeerInfo& Value)
+        {
+            Parse(Stream,Value);
+        }
     };
     struct ConnectionMetadata
     {
@@ -265,6 +322,53 @@ namespace MBChat2
         NotFound,
         Accepted
     };
+
+    struct GetResources : public MessageBase<MessageType::GetResources>
+    {
+        Hash DBHash;
+        Hash StartID;
+        Hash EndID;
+        uint64_t MaxInlineSize = 1500;
+
+        uint64_t SerializedSize()
+        {
+            uint64_t  ReturnValue = 0;
+            ReturnValue += DBHash.SerializedSize();
+            ReturnValue += StartID.SerializedSize();
+            ReturnValue += EndID.SerializedSize();
+            ReturnValue += sizeof(MaxInlineSize);
+            return ReturnValue;
+        }
+
+        template<typename T>
+        friend void Parse(T& Stream,GetResources& Value,uint16_t Version)
+        {
+            Parse(Stream,Value.DBHash,Version);
+            Parse(Stream,Value.StartID,Version);
+            Parse(Stream,Value.EndID,Version);
+            Stream & Value.MaxInlineSize;
+        }
+    };
+
+
+    struct ResourceResponse
+    {
+        ResourceHeader Header;
+        std::string Content;
+
+        template<typename T>
+        friend void Parse(T& Stream,ResourceResponse& Value,uint16_t  Version)
+        {
+            Parse(Stream,Value.Header);
+            Stream & Value.Content;
+        }
+        template<typename T>
+        friend void Parse(T& Stream,ResourceResponse& Value)
+        {
+            Parse(Stream,Value,0);
+        }
+    };
+
     struct STUNResponse
     {
         STUNResult Result = STUNResult::Refused;
@@ -285,26 +389,14 @@ namespace MBChat2
     };
     //Messages
 
-    typedef MBUtility::StaticVariant<Handshake,Publish,GetHeader,HeaderMessage> MessageContent;
+    typedef MBUtility::StaticVariant<GetResources> MessageContent;
    
     template<typename T>
     void Parse(T& Stream,MessageType Type,MessageContent& Value,uint16_t Version)
     {
-        if(Type == MessageType::Handshake)
+        if(Type == MessageType::GetResources)
         {
-            Parse(Stream,Value.GetOrAssign<Handshake>(),Version);
-        }
-        else if(Type == MessageType::Publish)
-        {
-            Parse(Stream,Value.GetOrAssign<Publish>(),Version);
-        }
-        else if(Type == MessageType::GetHeader)
-        {
-            Parse(Stream,Value.GetOrAssign<GetHeader>(),Version);
-        }
-        else if(Type == MessageType::Header)
-        {
-            Parse(Stream,Value.GetOrAssign<HeaderMessage>(),Version);
+            Parse(Stream,Value.GetOrAssign<GetResources>(),Version);
         }
     }
     template<typename T,typename V>
@@ -338,7 +430,6 @@ namespace MBChat2
         uint32_t MessageID = 0;
         uint32_t ResponseID = 0;
         uint64_t MessageLength = 0;
-        std::string Signature;
 
 
         //template<typename T>
@@ -359,7 +450,6 @@ namespace MBChat2
             Stream & Value.MessageID;
             Stream & Value.ResponseID;
             Stream & Value.MessageLength;
-            Stream & Value.Signature;
         }
         template<typename T>
         friend void ParseBody(T& Stream,Message& Value)
@@ -382,3 +472,12 @@ namespace MBChat2
         MessageContent Content;
     };
 }
+
+template<>
+struct std::hash<MBChat2::PeerInfo>
+{
+    size_t operator()(MBChat2::PeerInfo const& p) const
+    {
+        return std::hash<uint32_t>()(p.IP);
+    }
+};

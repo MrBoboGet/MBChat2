@@ -24,6 +24,7 @@
                 "/OverlayProtocol.cpp",
                 "/Client.cpp",
                 "/Connection.cpp",
+                "/UDPHandler.cpp",
                 "/MBChat_Main.cpp"
             ],
             "TargetType": "Executable"
@@ -35,6 +36,7 @@
             [
                 "/OverlayProtocol.cpp",
                 "/Client.cpp",
+                "/UDPHandler.cpp",
                 "/Connection.cpp"
             ],
             "TargetType": "Library"

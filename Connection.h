@@ -49,6 +49,7 @@ namespace MBChat2
             std::thread ReadThread;
             std::thread SendThread;
             std::atomic<uint64_t> NextSendID = 1;
+            std::atomic<uint16_t> Version = 0;
 
             //Not changed after they have been set by the constructor
             std::function<void(ConnectionParameters const&)> CloseHandler;
@@ -73,12 +74,15 @@ namespace MBChat2
         void SendMessage(Message MessageToSend,MessageCallback Callback);
 
         template<typename MessageType,typename FuncType>
-        void SendStreamingMessage(Message MessageToSend,FuncType Func)
+        void SendStreamingMessage(MessageContent MessageToSend,FuncType Func)
         {
             std::lock_guard Lock(m_SharedState->SendMutex);
             QueuedMessage& NewMessage = m_SharedState->QueuedMessages.emplace_back();
-            NewMessage.MessageToSend = std::move(MessageToSend);
-            NewMessage.ResponseCallback = [Func=std::move(Func)](MBUtility::IndeterminateInputStream& StreamReader)
+            Message RawMessage;
+            RawMessage.MessageID = m_SharedState->NextSendID.fetch_add(1);
+            RawMessage.ResponseID = 0;
+            NewMessage.MessageToSend.Content = std::move(MessageToSend);
+            NewMessage.ResponseCallback = [Func=std::move(Func),State=m_SharedState](MBUtility::IndeterminateInputStream& StreamReader)
                 {
                     MessageType NewMessage;
                     uint16_t Size = 0;
@@ -89,7 +93,8 @@ namespace MBChat2
                     }
                     try
                     {
-                        StreamReader & NewMessage;
+                        //StreamReader & NewMessage;
+                        Parse(StreamReader,NewMessage,State->Version.load());
                         Func(NewMessage);
                     }
                     catch(...)
@@ -173,6 +178,14 @@ namespace MBChat2
         bool operator()(PeerInfo const& Lhs,PeerInfo const& Rhs) const
         {
             return (*this)(Lhs.ID.Content,Rhs.ID.Content);
+        }
+        bool operator()(ID const& Lhs,PeerInfo const& Rhs) const
+        {
+            return (*this)(Lhs,Rhs.ID.Content);
+        }
+        bool operator()(PeerInfo const& Lhs,ID const& Rhs) const
+        {
+            return (*this)(Lhs.ID.Content,Rhs);
         }
     };
 
@@ -287,7 +300,7 @@ namespace MBChat2
             {
                 typedef typename R::ResponseType Result;
                 auto Future = GetState().UDP.SendRequest(Peer,Message);
-                Future.Then([Obj=this->shared_from_this()](Result const& Res)
+                Future.Then([Obj=this->shared_from_this()](Result Res)
                         {
                             (*Obj)(Res);
                         });
@@ -300,7 +313,7 @@ namespace MBChat2
             template<typename... Args>
             std::function<void(Args...)> MakeCallback()
             {
-                return [This=shared_from_this()](Args... Arguments)
+                return [This=this->shared_from_this()](Args... Arguments)
                 {
                     (*This)(std::forward<Args>(Arguments)...);
                 };
@@ -334,7 +347,6 @@ namespace MBChat2
             void NotificationHandler(MessageLocation Location,UDPNotification const& Notification);
             UDPResponse RequestHandler(UDPRequest const& Notification);
             void AddResourceToDB(ResourceHeader const& Header,std::string const& Content);
-            void AddHeaderToDB(ResourceHeader const& Header);
             bool ResourceInDB(Hash const& Resource);
             bool SubscribedToDB(Hash const& DBID);
             void AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions);
@@ -344,7 +356,7 @@ namespace MBChat2
             MessageCallback GetTCPMessageHandler();
 
             template<typename T,typename... ArgTypes>
-            void AddTask(ArgTypes&&... Args)
+            std::enable_if_t<std::is_constructible_v<T,ArgTypes...>> AddTask(ArgTypes&&... Args)
             {
                 auto Task = std::make_shared<T>(std::forward<ArgTypes>(Args)...);
                 Task->SetSharedState(shared_from_this());
@@ -421,30 +433,47 @@ namespace MBChat2
             ResourceHeader m_MessageToDownload;
             //try to send message to the peer  that send it in the first place,
             //and fall back to sending it directly 
+            ID m_DBID;
+            PeerInfo m_TargetPeer;
         public:
             //SyncDBTask(MessageLocation InitialLocation,ResourceHeader HeaderToDownload)
             //{
 
             //}
-            SyncDBTask(std::vector<PeerInfo> const& Peers,ID const& DBID)
+            SyncDBTask(std::vector<PeerInfo> const& Peers,ID DBID)
             {
                 int PeerSyncCount = std::min(size_t(1),Peers.size());
+                if(Peers.size() > 0)
+                {
+                    m_TargetPeer = Peers[0];   
+                }
+                std::swap(DBID,m_DBID);
                 //random selection
             }
             void Init()
             {
-                GetState().AddTask<InitializeConnection>(MakeCallback<std::shared_ptr<Connection>>(),MakeCallback<PeerInfo const&>());
+                GetState().AddTask<InitializeConnection>(
+                        m_TargetPeer,
+                        MakeCallback<std::shared_ptr<Connection>>(),
+                        MakeCallback<PeerInfo const&>());
             }
 
-
+            void operator()(PeerInfo const&)
+            {
+                   
+            }
 
             void operator()(std::shared_ptr<Connection> NewConnection)
             {
-                   
+                GetResources Message;
+                Message.DBHash.Content = m_DBID;
+                Message.EndID.Content = ID(m_DBID.size(),std::numeric_limits<uint8_t>::max());
+                Message.StartID.Content = ID(m_DBID.size(),0);
+                NewConnection->SendStreamingMessage<ResourceResponse>(std::move(Message),MakeCallback<ResourceResponse const&>());
             }
-            void operator()(ResourceHeader const& NewHeader)
+            void operator()(ResourceResponse const& NewHeader)
             {
-                   
+                GetState().AddResourceToDB(NewHeader.Header,NewHeader.Content);
             }
 
             void operator()(GetResourceHeader const& FailedRequest)
@@ -511,7 +540,7 @@ namespace MBChat2
             {
                 m_ActiveRequest.fetch_add(-1);
             }
-            void operator()(FindPeer_Response const& Response)
+            void operator()(FindPeer_Response Response)
             {
                 if(m_Finished)
                 {

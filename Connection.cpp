@@ -379,7 +379,8 @@ namespace MBChat2
                 //TODO Verify content
                 if(MessageNotification.Content.size() == 0 || !ResourceInDB(MessageNotification.Header.ParentHash))
                 {
-                    AddTask<SyncDBTask>(Location,MessageNotification.Header);
+                    //AddTask<SyncDBTask>(Location,MessageNotification.Header);
+                    AddResourceToDB(MessageNotification.Header,MessageNotification.Content);
                 }
                 else
                 {
@@ -485,34 +486,10 @@ namespace MBChat2
         }
         auto Result = DB.GetAllRows(Stmt);
 
-        if(ResourceRecievedCallback)
+        if(ResourceRecievedCallback && ResourceInDB(Header.HeaderHash) )
         {
             ResourceRecievedCallback(Header);
         }
-    }
-    void ConnectionManager::SharedState::AddHeaderToDB(ResourceHeader const& Header)
-    {
-        auto Stmt = DB.GetSQLStatement(
-                "INSERT INTO Resources(Hash,ContentType,UpType,Timestamp,ContentSize,DatabaseHash,ParentHash,ContentHash, "
-            "UploaderID,Signature,StoredLocaly,StoredInline,Content) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
-            ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content)");
-        //stmt.bind
-        Stmt.BindValue("Hash",Header.ContentHash.Content);
-        Stmt.BindValue("ContentType",Header.ContentType);
-        Stmt.BindValue("UpType",Header.UpType);
-        Stmt.BindValue("Timestamp",Header.TimeStamp);
-        Stmt.BindValue("ContentSize",Header.ContentSize);
-        Stmt.BindBlob("DatabaseHash",Header.OriginalDatabaseHash.Content);
-        Stmt.BindBlob("ParentHash",Header.ParentHash.Content);
-        Stmt.BindBlob("ContentHash",Header.ContentHash.Content);
-        Stmt.BindBlob("UploaderID",Header.Uploader.Content);
-        Stmt.BindBlob("Signature",Header.Sig.Content);
-
-        Stmt.BindValue("StoredLocaly",0);
-        Stmt.BindValue("StoredInline",0);
-        Stmt.BindNull("Content");
-
-        DB.GetAllRows(Stmt);
     }
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)
     {
