@@ -2,10 +2,10 @@
 
 namespace MBChat2
 {
-    UDPHandler::UDPHandler()
-        : m_Socket(0,0,0)
+    UDPHandler::UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler)
+        : m_Socket(ListenPort),m_RequestHandler(std::move(RequestHandler))
     {
-        m_Socket.Bind(0);//find some good candidate port
+        m_ListenThread = std::thread(&UDPHandler::p_ReadThread,this);
     }
     void UDPHandler::p_SendMessage(StoredMessage const& MessageToSend)
     {
@@ -32,6 +32,7 @@ namespace MBChat2
             std::string Buffer(m_Socket.ReadMaxPacketSize(),0);
             MBSockets::UDPSource Source;
             size_t RequestSize = m_Socket.ReadPacket(Source,Buffer.data(),Buffer.size(),WaitTimer);
+            std::cout<< "Packet recieved"<<std::endl;
             MessageLocation Location;
             Location.IP  = Source.IP;
             Location.Port  = Source.Port;
@@ -48,7 +49,7 @@ namespace MBChat2
                     if(Type ==  UDPMessageType::Notification)
                     {
                         UDPNotification Notification;
-                        ParseContent(InputStream,Notification);
+                        ReadVariant(InputStream,Notification);
                         m_ThreadPool.AddTask([&,ResponseID=ID,Location=Location,Notification=std::move(Notification)]()
                                 {
                                     try
@@ -69,15 +70,19 @@ namespace MBChat2
                     else if(Type == UDPMessageType::Request)
                     {
                         UDPRequest Request;
-                        ParseContent(InputStream,Request);
+                        ReadVariant(InputStream,Request);
                         m_ThreadPool.AddTask([&,RequestID=ID,Request=std::move(Request)]()
                                 {
                                     try
                                     {
-                                        auto Response = m_RequestHandler(Request);
+                                        auto Response = m_RequestHandler(Location,Request);
                                         std::string ResponseContent;
                                         MBUtility::MBStringOutputStream OutStream(ResponseContent);
-                                        ParseContent(OutStream,Response);
+                                        uint8_t Type = Response.Visit([](auto const& Value)
+                                                    {
+                                                        return Value.type;
+                                                    });
+                                        WriteVariant(OutStream,Type ,Response);
                                         p_SendResponse(Location.IP,Location.Port,RequestID,ResponseContent);
                                     }
                                     catch(...)
@@ -90,7 +95,7 @@ namespace MBChat2
                     else if(Type == UDPMessageType::Response)
                     {
                         UDPResponse Response;
-                        ParseContent(InputStream,Response);
+                        ReadVariant(InputStream,Response);
                         auto It = m_ResponseCallbacks.find(ID);
                         if(It != m_ResponseCallbacks.end() && It->second.IP == Location.IP)
                         {

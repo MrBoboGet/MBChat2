@@ -234,7 +234,7 @@ namespace MBChat2
         ID  p_StringToID(std::string const& String);
 
         template<typename Func>
-        void p_FillClosest(TreeNode const& Node,std::vector<PeerInfo>& OutInfo,ID const& TargetID,int k,Func AcceptFunc)
+        void p_FillClosest(IDSorter const& Sorter,TreeNode const& Node,std::vector<PeerInfo>& OutInfo,ID const& TargetID,int k,Func AcceptFunc) 
         {
                    
             if(OutInfo.size() >= k)
@@ -257,14 +257,12 @@ namespace MBChat2
             {
                 auto const& LeftID = Node.Left->CommonPrefix;
                 auto const& RightID = Node.Right->CommonPrefix;
-                auto LeftDistance = Distance(LeftID,TargetID);
-                auto RightDistance = Distance(LeftID,TargetID);
-                auto LesserNode = LeftDistance < RightDistance ? Node.Left.get() : Node.Right.get();
-                auto GreaterNode = LeftDistance < RightDistance ? Node.Right.get() : Node.Left.get();
-                p_FillClosest(*LesserNode,OutInfo,TargetID,k,AcceptFunc);
+                auto LesserNode = Sorter(LeftID,RightID) ? Node.Left.get() : Node.Right.get();
+                auto GreaterNode = Node.Left.get() == LesserNode ? Node.Right.get() : Node.Left.get();
+                p_FillClosest(Sorter,*LesserNode,OutInfo,TargetID,k,AcceptFunc);
                 if(OutInfo.size() < k)
                 {
-                    p_FillClosest(*GreaterNode,OutInfo,TargetID,k,AcceptFunc);
+                    p_FillClosest(Sorter,*GreaterNode,OutInfo,TargetID,k,AcceptFunc);
                 }
             }
         }
@@ -275,7 +273,8 @@ namespace MBChat2
         std::vector<PeerInfo> FindClosest(ID const& Key,int k,T Func)
         {
             std::vector<PeerInfo> ReturnValue;
-            p_FillClosest(m_RootNode,ReturnValue,Key,k,Func);
+            auto Sorter = IDSorter(Key);
+            p_FillClosest(Sorter,m_RootNode,ReturnValue,Key,k,Func);
             return ReturnValue;
         }
         void AddPeer(PeerInfo const& NewPeer);
@@ -313,7 +312,7 @@ namespace MBChat2
                 SendRequest(PeerInfo const& Peer,R Message)
             {
                 typedef typename R::ResponseType Result;
-                auto Future = GetState().UDP.SendRequest(Peer,Message);
+                auto Future = GetState().UDP->SendRequest(Peer,Message);
                 Future.Then([Obj=this->shared_from_this()](Result Res)
                         {
                             (*Obj)(Res);
@@ -347,7 +346,7 @@ namespace MBChat2
             //not needing mutex
             MBDB::MrBoboDatabase DB;
             MBUtility::ThreadPool ThreadPool;
-            UDPHandler UDP;
+            std::unique_ptr<UDPHandler> UDP;
 
             ResourceCallback ResourceRecievedCallback;
             RPCHandler RPCCallback;
@@ -360,7 +359,7 @@ namespace MBChat2
 
 
             void NotificationHandler(MessageLocation Location,UDPNotification const& Notification);
-            UDPResponse RequestHandler(UDPRequest const& Notification);
+            UDPResponse RequestHandler(MessageLocation Location,UDPRequest const& Notification);
             void AddResourceToDB(ResourceHeader const& Header,std::string const& Content);
             bool ResourceInDB(Hash const& Resource);
             bool SubscribedToDB(Hash const& DBID);
@@ -407,14 +406,15 @@ namespace MBChat2
             InitializeConnection(PeerInfo TargetPeer,ConnectionCallback Succeeded,ConnectionFailedCallback Failed)
             {
                 m_TargetPeer = std::move(TargetPeer);
+                m_Request.HostPort = 1338;
+
                 m_ConnectionSucceedCallback = std::move(Succeeded);
                 m_ConnectionFailedCallback = std::move(Failed);
             }
 
             void Init()
             {
-                std::lock_guard Lock(GetState().StateMutex);
-                GetState().UDP.SendRequest(m_TargetPeer,m_Request);
+                SendRequest(m_TargetPeer,m_Request);
             }
 
             void operator()(InitConnection const& FailedConnection)
@@ -431,13 +431,13 @@ namespace MBChat2
             }
             void operator()(InitConnection_Response const& AcceptedConnection)
             {
-                if(!m_Active)
+                if(!m_Active || !AcceptedConnection.Accepted)
                 {
                     return; 
                 }
                 ConnectionParameters Params;
                 Params.IP = m_TargetPeer.IP;
-                Params.PeerPort = m_TargetPeer.ListeningPort;
+                Params.PeerPort = AcceptedConnection.HostPort;
                 Params.LocalPort = m_Request.HostPort;
                 auto NewConnection = std::make_shared<Connection>(std::move(Params),GetState().GetTCPMessageHandler(),
                             [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
@@ -645,6 +645,7 @@ namespace MBChat2
        
         void AddDBPeer(ID const& PeerID,ID const& DatabaseID);
         void CreateDB(DatabaseDefinition const& Definition);
+        bool HasDB(ID const& DatabaseID);
 
         //called once after all of the initial parameters are set
         void JoinNetwork();

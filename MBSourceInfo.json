@@ -24,6 +24,8 @@
                 "/OverlayProtocol.cpp",
                 "/Client.cpp",
                 "/Connection.cpp",
+                "/DBConnection.cpp",
+                "/DBVisualiser.cpp",
                 "/UDPHandler.cpp",
                 "/MBChat_Main.cpp"
             ],
@@ -36,7 +38,9 @@
             [
                 "/OverlayProtocol.cpp",
                 "/Client.cpp",
+                "/DBConnection.cpp",
                 "/UDPHandler.cpp",
+                "/DBVisualiser.cpp",
                 "/Connection.cpp"
             ],
             "TargetType": "Library"

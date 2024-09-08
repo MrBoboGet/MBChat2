@@ -208,12 +208,26 @@ namespace MBChat2
                 });
         RPCPromise.Then( [&,PeerID=PeerID](MBParsing::JSONObject const& Response)
                 {
-                    auto NewDB = p_CreateChatDB(PeerID,m_LocalID);
-                    m_ConnectionManager->CreateDB(NewDB);
-                    m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
-                    m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
-                    p_AddVisualiser(NewDB.DatabaseID.Content);
+                    try
+                    {
+                        auto NewDB = p_CreateChatDB(PeerID,m_LocalID);
+                        if(!m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
+                        {
+                            m_ConnectionManager->CreateDB(NewDB);
+                            m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
+                            m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                        }
+                        p_AddVisualiser(NewDB.DatabaseID.Content);
+                    }
+                    catch(std::exception const& e)
+                    {
+                        std::cout<<e.what()<<std::endl;
+                    }
                 });
+    }
+    void Client::p_DisplayError(std::string const& ErrorMessage)
+    {
+           
     }
     void Client::p_AddVisualiser(ID const& DatabaseID)
     {
@@ -242,37 +256,68 @@ namespace MBChat2
     {
         if(Object["method"].GetStringData() == "startChat")
         {
-            auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
-            m_ConnectionManager->CreateDB(NewDB);
-            m_ConnectionManager->AddDBPeer(Peers.ID.Content,NewDB.DatabaseID.Content);
-            m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
-            p_AddVisualiser(NewDB.DatabaseID.Content);
+            try
+            {
+                auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
+                m_ConnectionManager->CreateDB(NewDB);
+                m_ConnectionManager->AddDBPeer(Peers.ID.Content,NewDB.DatabaseID.Content);
+                m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                p_AddVisualiser(NewDB.DatabaseID.Content);
+            }
+            catch(...)
+            {
+                    
+            }
             Response.SetValue(MBParsing::JSONObject(MBParsing::JSONObjectType::Aggregate));
         }
     }
     int Client::Run()
     {
+        MBSockets::Init();
         int ReturnValue = 0;
+
+        ///std::string PortBuffer;
+        ///using MBParsing::operator&;
+        ///MBUtility::MBStringOutputStream OutStream(PortBuffer);
+        ///OutStream & uint16_t(1337);
+        ///MBUtility::MBBufferInputStream InStream(PortBuffer.data(), PortBuffer.size());
+        ///uint16_t Value;
+        ///InStream& Value;
+        ///std::cout << Value;
+        ///return 0;
+
+
+        //auto IP = MBSockets::StringToIP("192.168.0.123");
+        //std::cout<<MBSockets::IPToString(IP)<<std::endl;
+        //return 0;
+        
         std::filesystem::path ConfigPath = MBSystem::GetUserHomeDirectory()/".mbchat/";
         std::filesystem::path DBPath = MBSystem::GetUserHomeDirectory()/".mbchat/localdb.db";
         if(!std::filesystem::exists(DBPath))
         {
             std::filesystem::create_directories(DBPath.parent_path());
             m_LocalDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(DBPath),MBDB::DBOpenOptions::ReadWrite);
-            MBError Result = true;
-            m_LocalDB->GetAllRows(
-    #include "DBDefinition.inc"
-                    ,
-                    &Result);
-            if(!Result)
+            try
             {
-                std::cout<<"Failed creating database with following error: "+Result.ErrorMessage<<std::endl;
+                m_LocalDB->Exec(
+        #include "DBDefinition.inc"
+                        );
+            }
+            catch(std::exception const& e)
+            {
+                
+                std::cout<<"Failed creating database: "<<e.what()<<std::endl;
                 std::exit(1);
             }
         }
         else
         {
             m_LocalDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(DBPath),MBDB::DBOpenOptions::ReadWrite);
+        }
+        auto IDPath = MBUnicode::PathToUTF8(ConfigPath/"id");
+        if(!std::filesystem::exists(IDPath))
+        {
+            std::cout<<"No DB file found"<<std::endl;
         }
         auto IDContent = MBUtility::ReadWholeFile(MBUnicode::PathToUTF8(ConfigPath/"id"));
         m_LocalID.resize(IDContent.size());
@@ -284,6 +329,25 @@ namespace MBChat2
                 [&](PeerInfo const&  Peer,MBParsing::JSONObject const& Object, MBUtility::Promise<MBParsing::JSONObject> Obj )
                     {p_RPCHandler(Peer,Object,std::move(Obj));}
                 );
+        std::vector<MBDB::MBDB_RowData> PreviousPeers;
+        try
+        {
+            PreviousPeers = m_LocalDB->GetAllRows("SELECT ID,IP,Port FROM Peers ORDER BY LastSeen LIMIT 100");
+        }
+        catch(std::exception const& e)
+        {
+            std::cout<< "Error getting previous peers: "<<e.what()<<std::endl;   
+            std::exit(1);
+        }
+        std::vector<PeerInfo> Peers;
+        for(auto& Peer : PreviousPeers)
+        {
+            PeerInfo& NewPeer = Peers.emplace_back();
+            NewPeer.IP = std::get<MBDB::IntType>(Peer["IP"]);
+            NewPeer.ID.Content = MBChat2::StringToID(std::get<std::string>(Peer["ID"]));
+            NewPeer.ListeningPort = std::get<MBDB::IntType>(Peer["Port"]);
+        }
+        m_ConnectionManager->AddConnections(Peers);
 
         m_Terminal.SetExitHandler([]{ std::exit(0);});
         m_Terminal.InitializeWindowMode();
@@ -312,6 +376,7 @@ namespace MBChat2
         //m_Terminal.PrintWindowBuffer(m_TopWindow.GetBuffer(),0,0);
         m_Terminal.PrintWindowBuffer(m_TopLayerer.GetBuffer(),0,0);
         m_Terminal.HideCursor();
+        m_Terminal.Refresh();
         while(ShouldRun)
         {
             auto NewInput = m_Terminal.GetNextEvent();

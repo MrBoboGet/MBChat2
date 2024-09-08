@@ -27,6 +27,7 @@ namespace MBChat2
         STUNResponse,
         GetPeers,
         Peers,
+        JSONRPC,
         RPC,
         Close,
         RPCResponse,
@@ -163,7 +164,7 @@ namespace MBChat2
     struct ResourceHeader
     {
         Hash HeaderHash;
-        ContentType ContentType = ContentType::Text;
+        ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         uint64_t TimeStamp = 0;
         uint64_t ContentSize = 0;
@@ -177,7 +178,7 @@ namespace MBChat2
         template<typename T>
         friend void Parse(T& Stream,ResourceHeader& Value,uint16_t Version)
         {
-            Stream & Value.ContentType;
+            Stream & Value.Type;
             Stream & Value.UpType;
             Stream & Value.TimeStamp;
             Stream & Value.ContentSize;
@@ -249,7 +250,7 @@ namespace MBChat2
     struct ResourceContent
     {
         Key Uploader;
-        ContentType ContentType = ContentType::Text;
+        ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         Hash ParentHash;
         std::string Content;
@@ -257,7 +258,7 @@ namespace MBChat2
     struct PublishableResourceHeader
     {
         Key Uploader;
-        ContentType ContentType = ContentType::Text;
+        ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         Hash DatabaseHash;
         Hash ParentHash;
@@ -418,6 +419,28 @@ namespace MBChat2
     struct JSONRPC
     {
         MBParsing::JSONObject Object;
+        template<typename T>
+        friend void Parse(T& Stream,JSONRPC& Value,uint16_t Version)
+        {
+            if(MBParsing::Writing<T>())
+            {
+                std::string SerializedString = Value.Object.ToString();
+                Stream & SerializedString;
+            }
+            else
+            {
+                std::string Content;
+                Stream & Content;
+
+                size_t ParseOffset = 0;
+                MBError Error = true;
+                Value.Object = MBParsing::ParseJSONObject(Content,0,&ParseOffset,&Error);
+                if(!Error)
+                {
+                    throw std::runtime_error("Error parsing JSONRPC request: invalid JSON: "+Error.ErrorMessage);
+                }
+            }
+        }
     };
     //Messages
 
@@ -429,6 +452,10 @@ namespace MBChat2
         if(Type == MessageType::GetResources)
         {
             Parse(Stream,Value.GetOrAssign<GetResources>(),Version);
+        }
+        else if(Type == MessageType::JSONRPC)
+        {
+            Parse(Stream,Value.GetOrAssign<JSONRPC>(),Version);
         }
     }
     template<typename T,typename V>

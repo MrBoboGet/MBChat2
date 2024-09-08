@@ -15,6 +15,7 @@ namespace MBChat2
     {
         try
         {
+            State->Transport->Open();
             while(!State->Stopping.load())
             {
                 Message NewMessage;
@@ -33,10 +34,6 @@ namespace MBChat2
                         Handler = std::move(It->second);
                         State->MessageCallbacks.erase(It);
                     }
-                    else
-                    {
-                        Handler = State->GenericMessageHandler;
-                    }
                 }
                 if(Handler.IsType<MessageCallback>())
                 {
@@ -49,6 +46,11 @@ namespace MBChat2
                     while(Callback( (MBUtility::IndeterminateInputStream&)*State->Transport)) {
 
                     }
+                }
+                else
+                {
+                    NewMessage.ReadBody(*State->Transport);
+                    State->GenericMessageHandler(State->Peer,NewMessage);
                 }
             }
         }
@@ -80,6 +82,7 @@ namespace MBChat2
                         break;
                     }
                     auto QueuedMessage = std::move(State->QueuedMessages.front());
+                    State->QueuedMessages.pop_front();
                     if(QueuedMessage.MessageToSend.IsType<Message>())
                     {
                         Message MessageToSend;
@@ -88,7 +91,14 @@ namespace MBChat2
                         State->NextSendID.fetch_add(1);
                         State->MessageCallbacks[NewMessage.Header.MessageID] = std::move(QueuedMessage.ResponseCallback);
                         MessageToSend = std::move(NewMessage);
-                        MessageToSend.WriteMessage(*State->Transport);
+
+                        std::string OutputMessage;
+                        MBUtility::MBStringOutputStream ContentStream(OutputMessage);
+                        MessageToSend.Header.Version = 0;
+                        ParseBody(static_cast<MBUtility::MBOctetOutputStream&>(ContentStream),MessageToSend);
+                        MessageToSend.Header.MessageLength = OutputMessage.size();
+                        ParseHeader( static_cast<MBUtility::MBOctetOutputStream&>(*State->Transport),MessageToSend);
+                        *State->Transport << OutputMessage;
                     }
                     else if(QueuedMessage.MessageToSend.IsType<StreamedResponseMessage>())
                     {
@@ -156,12 +166,12 @@ namespace MBChat2
     }
     Connection::Connection(ConnectionParameters Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler)
     {
-        std::unique_ptr<MBSockets::UDPSocket> UDPStream = std::make_unique<MBSockets::UDPSocket>(Peer.IP,Peer.PeerPort,Peer.LocalPort);
+        std::unique_ptr<MBUtility::BidirectionalPacketStream> UDPStream = std::make_unique<MBSockets::UDPSocket>(Peer.IP,Peer.PeerPort,Peer.LocalPort);
         m_SharedState = std::make_shared<State>();
         MBTCP::TCPConnectionParameters Params;
         Params.DestinationPort = Peer.PeerPort;
         Params.HostPort = Peer.LocalPort;
-        m_SharedState->Transport = std::make_unique<MBTCP::MBTCP>(Params, MBUtility::SmartPtr((MBUtility::BidirectionalPacketStream* ) UDPStream.get()));
+        m_SharedState->Transport = std::make_unique<MBTCP::MBTCP>(Params, MBUtility::SmartPtr(std::move(UDPStream)));
         m_SharedState->GenericMessageHandler = std::move(MessageHandler);
         m_SharedState->ReadThread = std::thread(Connection::p_ReadThread,m_SharedState);
         m_SharedState->SendThread = std::thread(Connection::p_SendThread,m_SharedState);
@@ -250,7 +260,8 @@ namespace MBChat2
     {
         std::vector<PeerInfo> ReturnValue;
         //auto TargetID = p_StringToID(Key);
-        p_FillClosest(m_RootNode,ReturnValue,Key,k,[](PeerInfo const& Peer){return true;});
+        auto Sorter = IDSorter(Key);
+        p_FillClosest(Sorter,m_RootNode,ReturnValue,Key,k,[](PeerInfo const& Peer){return true;});
         return ReturnValue;
     }
     void KademliaTree::AddPeer(PeerInfo const& NewPeer)
@@ -282,22 +293,22 @@ namespace MBChat2
     }
     void KademliaTree::TreeNode::AddPeer(PeerInfo const& NewPeer)
     {
-        if(Left != nullptr && Content.size() < k)
+        if(Left == nullptr && Content.size() < k)
         {
             Content.push_back(NewPeer);
             return;
         }
-        if(Left != nullptr)
+        if(Left == nullptr)
         {
             Split();
         }
         if(NewPeer.ID.Content < Right->CommonPrefix)
         {
-            Right->AddPeer(NewPeer);
+            Left->AddPeer(NewPeer);
         }
         else
         {
-            Left->AddPeer(NewPeer);
+            Right->AddPeer(NewPeer);
         }
     }
     //
@@ -311,8 +322,18 @@ namespace MBChat2
     }
     void ConnectionManager::AddConnection(PeerInfo Peer)
     {
-        std::lock_guard StateLock(m_State->StateMutex);
-        m_State->Peers.AddPeer(std::move(Peer));
+
+        {
+            std::lock_guard StateLock(m_State->StateMutex);
+            m_State->Peers.AddPeer(std::move(Peer));
+        }
+        auto AddPeerStmt = m_State->DB.GetSQLStatement("INSERT INTO Peers (ID,IP,Port) VALUES (:ID,:IPxd,:Port) ON CONFLICT(ID)"
+                " DO UPDATE SET IP=excluded.IP,Port=Excluded.Port;");
+        AddPeerStmt.BindValue("ID",Peer.ID.Content);
+        AddPeerStmt.BindValue("IPxd",Peer.IP);
+        AddPeerStmt.BindValue("Port",Peer.ListeningPort);
+
+        m_State->DB.GetAllRows(AddPeerStmt);
     }
     void ConnectionManager::AddDBPeer(ID const& PeerID,ID const& DatabaseID)
     {
@@ -322,6 +343,46 @@ namespace MBChat2
         {
             m_State->PeerSubscriptions[DatabaseID].insert(ClosestPeers[0]);
         }
+    }
+    void ConnectionManager::CreateDB(DatabaseDefinition const& Definition)
+    {
+        auto CreateDBStatement = m_State->DB.GetSQLStatement("INSERT INTO Databases(Hash,Time) VALUES (:Hash,:Timestamp);");
+        CreateDBStatement.BindValue("Hash",Definition.DatabaseID.Content);
+        CreateDBStatement.BindValue("Timestamp",Definition.Timestamp);
+        m_State->DB.GetAllRows(CreateDBStatement);
+
+        auto InsertPeerStatement = m_State->DB.GetSQLStatement("INSERT INTO DatabaseParticipants(DatabaseID,ParticipantID) VALUES (:DatabaseID,"
+             ":ParticipantID);");
+        for(auto const& Participant : Definition.Participants)
+        {
+            InsertPeerStatement.BindValue("DatabaseID",Definition.DatabaseID.Content);
+            InsertPeerStatement.BindValue("ParticipantID",Definition.DatabaseID.Content);
+            m_State->DB.GetAllRows(InsertPeerStatement);
+            InsertPeerStatement.Reset();
+        }
+        auto InsertForkStatement = m_State->DB.GetSQLStatement("INSERT INTO DatabaseForks(OriginalDB,DBFork) VALUES (:OriginalDB,"
+             ":DBFork);");
+        for(auto const& Forks : Definition.ForkedDatabase)
+        {
+            InsertForkStatement.BindValue("OriginalDB",Forks.Content);
+            InsertForkStatement.BindValue("DBFork",Definition.DatabaseID.Content);
+            m_State->DB.GetAllRows(InsertForkStatement);
+            InsertForkStatement.Reset();
+        }
+    }
+    bool ConnectionManager::HasDB(ID const& DatabaseID)
+    {
+        try
+        {
+            auto Statement = m_State->DB.GetSQLStatement("SELECT Hash FROM Databases WHERE Hash = :Hash");
+            Statement.BindValue("Hash",DatabaseID);
+            auto Rows = m_State->DB.GetAllRows(Statement);
+            return Rows.size() > 0;
+        }
+        catch(...)
+        {
+        }
+        return false;
     }
     //void CreateDB(DatabaseDefinition const& Definition)
     //{
@@ -339,6 +400,7 @@ namespace MBChat2
         auto ReturnValue = Promise->GetFuture();
         Message NewMessage;
         JSONRPC& RPCMessage = NewMessage.Content.GetOrAssign<JSONRPC>();
+        NewMessage.Header.Type = MessageType::JSONRPC;
         RPCMessage.Object = std::move(ObjectToSend);
 
         std::lock_guard Lock(m_State->StateMutex);
@@ -539,7 +601,7 @@ namespace MBChat2
                         {
                             for(auto const& Peer :  It->second)
                             {
-                                UDP.SendNotification(Peer,MessageNotification);
+                                UDP->SendNotification(Peer,MessageNotification);
                             }
                         }
                     }
@@ -552,7 +614,7 @@ namespace MBChat2
             AddPeerSubscriptions(SubscriptionNotification.Peer,SubscriptionNotification.SubscribedDatabases);
         }
     }
-    UDPResponse ConnectionManager::SharedState::RequestHandler(UDPRequest const& Request)
+    UDPResponse ConnectionManager::SharedState::RequestHandler(MessageLocation Location,UDPRequest const& Request)
     {
         UDPResponse Response;
         //if(Request.IsType<GetDBPeers>())
@@ -598,17 +660,43 @@ namespace MBChat2
                 KeyResponse.PeerKey.Content = Result[0].GetColumnData<std::string>(0);
             }
         }
+        else if(Request.IsType<InitConnection>())
+        {
+            auto const& ConnectionRequset = Request.GetType<InitConnection>();
+            ConnectionParameters Params;
+            Params.IP = ConnectionRequset.HostInfo.IP;
+            Params.PeerPort = ConnectionRequset.HostPort;
+            Params.LocalPort = 1338;
+            auto& ConnectionResponse = Response.GetOrAssign<InitConnection_Response>();
+            ConnectionResponse.Accepted = true;
+            ConnectionResponse.HostPort = 1338;
+            Params.IP = Location.IP;
+
+            {
+                std::lock_guard StateLock = std::lock_guard(StateMutex);
+                auto It = ActiveConnections.find(ConnectionRequset.HostInfo.ID.Content);
+                if(It == ActiveConnections.end())
+                {
+                    auto NewConnection = std::make_shared<Connection>(std::move(Params),GetTCPMessageHandler(),
+                            [ID=ConnectionRequset.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
+                                std::lock_guard Lock(ThisTask->StateMutex);
+                                ThisTask->ActiveConnections.erase(ThisTask->ActiveConnections.find(ID));
+                            });
+                    ActiveConnections[ConnectionRequset.HostInfo.ID.Content] = NewConnection;
+                }
+            }
+        }
         return Response;
     }
     void ConnectionManager::SharedState::AddResourceToDB(ResourceHeader const& Header,std::string const& Content)
     {
         auto Stmt = DB.GetSQLStatement(
-                "INSERT INTO Resources(Hash,ContentType,UpType,Timestamp,ContentSize,DatabaseHash,ParentHash,ContentHash, "
+                "INSERT INTO Resources(Hash,ContentType,UpType,Time,ContentSize,DatabaseHash,ParentHash,ContentHash, "
             "UploaderID,Signature,StoredLocaly,StoredInline,Content) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
             ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content)");
         //stmt.bind
         Stmt.BindValue("Hash",Header.ContentHash.Content);
-        Stmt.BindValue("ContentType",Header.ContentType);
+        Stmt.BindValue("ContentType",Header.Type);
         Stmt.BindValue("UpType",Header.UpType);
         Stmt.BindValue("Timestamp",Header.TimeStamp);
         Stmt.BindValue("ContentSize",Header.ContentSize);
@@ -665,6 +753,14 @@ namespace MBChat2
         }
         return ReturnValue;
     }
+    void ConnectionManager::SharedState::AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions)
+    {
+        std::lock_guard Lock(StateMutex);
+        for(auto const& Subscription : Subscriptions)
+        {
+            PeerSubscriptions[Subscription.Content].insert(Peer);
+        }
+    }
     void ConnectionManager::SharedState::AddJoinDBTask(ID const& DBID)
     {
         FindPeerRequest Request;
@@ -699,7 +795,7 @@ namespace MBChat2
                                 {
                                     ResourceResponse Content;
                                     Content.Header.HeaderHash = StringToID(std::get<std::string>(Row["Hash"]));
-                                    Content.Header.ContentType = ContentType( std::get<int64_t>(Row["ContentType"]));
+                                    Content.Header.Type = ContentType( std::get<int64_t>(Row["ContentType"]));
                                     Content.Header.UpType = UploadType( std::get<int64_t>(Row["UpType"]));
                                     Content.Header.TimeStamp =  std::get<int64_t>(Row["Timestamp"]);
                                     Content.Header.ContentSize =  std::get<int64_t>(Row["ContentSize"]);
@@ -753,6 +849,17 @@ namespace MBChat2
         m_State->ResourceRecievedCallback = std::move(Callback);
         m_State->RPCCallback = std::move(RPCCallback);
         m_State->HostID.Content = Params.LocalID;
+
+        auto WeakStatePtr = std::weak_ptr<SharedState>(m_State);
+        m_State->UDP = std::make_unique<UDPHandler>(1337,[This=WeakStatePtr](MessageLocation Location,UDPRequest const& Request)
+                {
+                    auto Shared = This.lock();
+                    if(Shared != nullptr)
+                    {
+                        return Shared->RequestHandler(Location,Request);
+                    }
+                    return UDPResponse();
+                });
     }
     //std::vector<PeerInfo> ConnectionManager::SharedState::FindDBPeers(ID const&,int k)
     //{

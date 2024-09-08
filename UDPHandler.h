@@ -170,7 +170,7 @@ namespace MBChat2
             Stream & Value.HostPort;
         }
     };
-    struct InitConnection : public Request<5,GetResourceContent_Response>
+    struct InitConnection : public Request<5,InitConnection_Response>
     {
         PeerInfo HostInfo;
         uint16_t HostPort = 0;
@@ -257,15 +257,21 @@ namespace MBChat2
     ///}
 
     template<typename StreamType,typename... Args>
-    void ParseContent(StreamType& Stream,MBUtility::StaticVariant<Args...>& Value)
+    void ReadVariant(StreamType& Stream,MBUtility::StaticVariant<Args...>& Value)
     {
         uint8_t Type;
         Stream & Type;
         ParseVariant(Stream,Value,Type,MBUtility::TypeList<Args...>());
     }
+    template<typename StreamType,typename... Args>
+    void WriteVariant(StreamType& Stream,uint8_t Type,MBUtility::StaticVariant<Args...>& Value)
+    {
+        Stream & Type;
+        ParseVariant(Stream,Value,Type,MBUtility::TypeList<Args...>());
+    }
 
     typedef std::function<void (MessageLocation,UDPNotification const&)> UDPNotificationHandler;
-    typedef std::function<UDPResponse (UDPRequest const&)> UDPRequestHandler;
+    typedef std::function<UDPResponse (MessageLocation PeerLocation,UDPRequest const&)> UDPRequestHandler;
     class UDPHandler
     {
         std::thread m_ListenThread;
@@ -315,6 +321,7 @@ namespace MBChat2
         //std::unordered_map<uint32_t,std::uno
     public:
 
+        UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler);
         UDPHandler();
         
         template<typename MessageType>
@@ -344,11 +351,12 @@ namespace MBChat2
             MBUtility::MBStringOutputStream OutStream(NewMessage.SerializedContent);
             OutStream & UDPMessageType::Request;
             OutStream & NewMessage.ID;
+            OutStream & Message.type;
             Parse(OutStream,Message);
             NewMessage.IP = Peer.IP;
             NewMessage.Port = Peer.ListeningPort;
             MBUtility::Promise<ResponseType> Promise;
-            MBUtility::Future<ResponseType> ReturnValue;
+            MBUtility::Future<ResponseType> ReturnValue = Promise.GetFuture();
             {
                 std::lock_guard Lock(m_StateMutex);
                 m_ResponseCallbacks[NewMessage.ID].IP = Peer.IP;
