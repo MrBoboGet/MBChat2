@@ -25,6 +25,7 @@ namespace MBChat2
                     //message silently dropped, should reduce trust for peer or something
                     continue;
                 }
+                std::cout<<"TCP message recieved"<<std::endl;
                 ResponseHandler Handler;
                 {
                     std::lock_guard Lock(State->SendMutex);
@@ -764,7 +765,6 @@ namespace MBChat2
     void ConnectionManager::SharedState::AddJoinDBTask(ID const& DBID)
     {
         FindPeerRequest Request;
-        std::lock_guard  Lock(StateMutex);
         Request.HostPeer = HostInfo;
         Request.PeerID  = HostInfo.ID;
         Request.k = 20;

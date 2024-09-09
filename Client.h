@@ -49,17 +49,19 @@ namespace MBChat2
         std::shared_ptr<MBDB::MrBoboDatabase> m_Database;
 
 
-
         class DBWindow : public MBCLI::Window
         {
             Client* m_AssociatedClient = nullptr;
 
             MBCLI::Window* p_GetActiveWindow();
+            MBCLI::Dimensions m_Dims;
         public:   
             DBWindow(Client* AssociatedClient)
             {
                 m_AssociatedClient = AssociatedClient;   
             }
+            MBCLI::Dimensions GetDimensions();
+            
             virtual bool Updated();
             virtual void HandleInput(MBCLI::ConsoleInput const& Input);
             virtual void SetDimensions(MBCLI::Dimensions NewDimensions);
@@ -67,6 +69,8 @@ namespace MBChat2
             virtual MBCLI::CursorInfo GetCursorInfo();
             virtual MBCLI::TerminalWindowBuffer GetBuffer();
         };
+
+        std::shared_ptr<DBWindow> m_DBVisualiserWindow;
 
         static DatabaseDefinition p_CreateChatDB(ID const& LocalID,ID const& PeerID);
 

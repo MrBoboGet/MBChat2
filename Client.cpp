@@ -45,11 +45,16 @@ namespace MBChat2
     void Client::DBWindow::SetDimensions(MBCLI::Dimensions NewDimensions)
     {
         auto ActiveWindow = p_GetActiveWindow();
+        m_Dims = NewDimensions;
         if(ActiveWindow == nullptr)
         {
             return;   
         }
         ActiveWindow->SetDimensions(NewDimensions);
+    }
+    MBCLI::Dimensions Client::DBWindow::GetDimensions()
+    {
+        return m_Dims;
     }
     void Client::DBWindow::SetFocus(bool IsFocused)
     {
@@ -105,6 +110,10 @@ namespace MBChat2
                     m_CommandRepl.SetMaxDims(MBCLI::Dimensions(-1,1));
                     m_CommandRepl.SetOnEnterFunc([&](std::string const& String){p_HandleCommandString(String);});
                     m_TopLayerer.AddLayer(MBUtility::SmartPtr<MBCLI::Window>(&m_CommandRepl));
+                }
+                else 
+                {
+                    m_TopWindow.HandleInput(Character);
                 }
             }
         }
@@ -237,9 +246,13 @@ namespace MBChat2
         {
             VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_Database);
         }
-        NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
-        VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
         m_VisualisedDB = DatabaseID;
+        NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
+        auto TermInfo = m_Terminal.GetTerminalInfo();
+        m_TopLayerer.SetDimensions(MBCLI::Dimensions(TermInfo.Width,TermInfo.Height));
+        NewVisualiser->SetDimensions(m_DBVisualiserWindow->GetDimensions());
+        VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
+        m_TopWindow.MoveRight();
     }
     void Client::p_ResourceRecievedHandler(ResourceHeader const& Header)
     {
@@ -366,8 +379,9 @@ namespace MBChat2
 
         std::vector<MBCLI::WindowManager::WindowContainer> Windows;
         Windows.emplace_back(MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow));
-        auto VisualisedWindow = DBWindow(this);
-        Windows.emplace_back(MBUtility::SmartPtr((MBCLI::Window*)&VisualisedWindow));
+        //auto VisualisedWindow = DBWindow(this);
+        m_DBVisualiserWindow = std::make_shared<DBWindow>(this);
+        Windows.emplace_back(MBUtility::SmartPtr( std::static_pointer_cast<MBCLI::Window>(m_DBVisualiserWindow)));
         
         m_TopWindow = MBCLI::WindowManager(std::move(Windows) , Dims,false,1);
         m_TopLayerer.SetDimensions(Dims);
