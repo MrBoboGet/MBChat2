@@ -220,10 +220,10 @@ namespace MBChat2
                     try
                     {
                         auto NewDB = p_CreateChatDB(PeerID,m_LocalID);
+                        m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
                         if(!m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
                         {
                             m_ConnectionManager->CreateDB(NewDB);
-                            m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
                             m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
                         }
                         p_AddVisualiser(NewDB.DatabaseID.Content);
@@ -244,7 +244,7 @@ namespace MBChat2
         auto& VisualisersInfo = m_ActiveVisualiser[DatabaseID];
         if(VisualisersInfo.Connection == nullptr)
         {
-            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_Database);
+            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_Database,DatabaseID);
         }
         m_VisualisedDB = DatabaseID;
         NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
@@ -254,9 +254,9 @@ namespace MBChat2
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
         m_TopWindow.MoveRight();
     }
-    void Client::p_ResourceRecievedHandler(ResourceHeader const& Header)
+    void Client::p_ResourceRecievedHandler(NewMessage const& Header)
     {
-        auto It = m_ActiveVisualiser.find(Header.OriginalDatabaseHash.Content);
+        auto It = m_ActiveVisualiser.find(Header.Header.OriginalDatabaseHash.Content);
         if(It != m_ActiveVisualiser.end())
         {
             for(auto& Visualiser : It->second.Visualiser)
@@ -273,7 +273,7 @@ namespace MBChat2
             {
                 auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
                 m_ConnectionManager->CreateDB(NewDB);
-                m_ConnectionManager->AddDBPeer(Peers.ID.Content,NewDB.DatabaseID.Content);
+                m_ConnectionManager->AddDBPeer(Peers,NewDB.DatabaseID.Content);
                 m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
                 p_AddVisualiser(NewDB.DatabaseID.Content);
             }
@@ -338,7 +338,7 @@ namespace MBChat2
 
         m_ConnectionManager = std::make_shared<ConnectionManager>(IDParameters(),
                 MBUnicode::PathToUTF8(DBPath),
-                [&](ResourceHeader const& Resource ){p_ResourceRecievedHandler(Resource);},
+                [&](NewMessage const& Resource ){p_ResourceRecievedHandler(Resource);},
                 [&](PeerInfo const&  Peer,MBParsing::JSONObject const& Object, MBUtility::Promise<MBParsing::JSONObject> Obj )
                     {p_RPCHandler(Peer,Object,std::move(Obj));}
                 );
@@ -377,15 +377,21 @@ namespace MBChat2
         auto SideWindow = MBTUI::BufferWindow(SideBar);
         auto RestWindow = MBTUI::BufferWindow(Rest);
 
-        std::vector<MBCLI::WindowManager::WindowContainer> Windows;
-        Windows.emplace_back(MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow));
-        //auto VisualisedWindow = DBWindow(this);
         m_DBVisualiserWindow = std::make_shared<DBWindow>(this);
-        Windows.emplace_back(MBUtility::SmartPtr( std::static_pointer_cast<MBCLI::Window>(m_DBVisualiserWindow)));
+        //std::vector<MBCLI::WindowManager::WindowContainer> Windows;
         
-        m_TopWindow = MBCLI::WindowManager(std::move(Windows) , Dims,false,1);
-        m_TopLayerer.SetDimensions(Dims);
+        
+        m_TopWindow.AddWindow((MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow)),MBCLI::WindowStretchInfo(-1,-1,12));
+        m_TopWindow.AddWindow((MBUtility::SmartPtr( std::static_pointer_cast<MBCLI::Window>(m_DBVisualiserWindow))));
+        m_TopWindow.SetVertical(false);
+        m_TopWindow.SetActiveWindowIndex(1);
+
+        //Windows.emplace_back(MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow));
+        //Windows.emplace_back(MBUtility::SmartPtr( std::static_pointer_cast<MBCLI::Window>(m_DBVisualiserWindow)));
+        
+        //m_TopWindow = MBCLI::WindowManager(std::move(Windows) , Dims,false,1);
         m_TopLayerer.AddLayer(MBUtility::SmartPtr((MBCLI::Window*)&m_TopWindow));
+        m_TopLayerer.SetDimensions(Dims);
         bool ShouldRun = true;
         //m_Terminal.PrintWindowBuffer(m_TopWindow.GetBuffer(),0,0);
         m_Terminal.PrintWindowBuffer(m_TopLayerer.GetBuffer(),0,0);

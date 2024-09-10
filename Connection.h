@@ -29,7 +29,7 @@ namespace MBChat2
     };
     class Connection;
     typedef MBUtility::MOFunction<void(PeerInfo const&, Message const&)> MessageCallback;
-    typedef MBUtility::MOFunction<void(ResourceHeader const&)> ResourceCallback;
+    typedef MBUtility::MOFunction<void(NewMessage const&)> ResourceCallback;
     typedef MBUtility::MOFunction<void(PeerInfo const&,MBParsing::JSONObject,MBUtility::Promise<MBParsing::JSONObject>)> RPCHandler;
     typedef MBUtility::MOFunction<void (MBUtility::MBOctetOutputStream&)> StreamedResponseHandler;
     class Connection
@@ -637,13 +637,14 @@ namespace MBChat2
 
         void AddConnections(std::vector<PeerInfo> const& Peers);
         void AddConnection(PeerInfo Peer);
-        void PublishMessage(PublishableResourceHeader const& Message);
+        void PublishMessage(PublishableResourceHeader Message);
         //
 
         MBUtility::Future<MBParsing::JSONObject> SendPeerRPC(ID const& PeerID,
                 MBParsing::JSONObject ObjectToSend);
        
         void AddDBPeer(ID const& PeerID,ID const& DatabaseID);
+        void AddDBPeer(PeerInfo const& Peer,ID const& DatabaseID);
         void CreateDB(DatabaseDefinition const& Definition);
         bool HasDB(ID const& DatabaseID);
 

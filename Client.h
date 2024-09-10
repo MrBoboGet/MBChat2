@@ -79,7 +79,7 @@ namespace MBChat2
         void p_DisplayError(std::string const& ErrorMessage);
 
         void p_AddVisualiser(ID const& DatabaseID);
-        void p_ResourceRecievedHandler(ResourceHeader const& Header);
+        void p_ResourceRecievedHandler(NewMessage const& Header);
         void p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response);
 
         std::vector<std::string> p_TokenizeCommand(std::string const& NewCommand);

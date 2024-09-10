@@ -345,6 +345,11 @@ namespace MBChat2
             m_State->PeerSubscriptions[DatabaseID].insert(ClosestPeers[0]);
         }
     }
+    void ConnectionManager::AddDBPeer(PeerInfo const& Peer,ID const& DatabaseID)
+    {
+        std::lock_guard StateLock(m_State->StateMutex);
+        m_State->PeerSubscriptions[DatabaseID].insert(Peer);
+    }
     void ConnectionManager::CreateDB(DatabaseDefinition const& Definition)
     {
         auto CreateDBStatement = m_State->DB.GetSQLStatement("INSERT INTO Databases(Hash,Time) VALUES (:Hash,:Timestamp);");
@@ -389,9 +394,35 @@ namespace MBChat2
     //{
     //       
     //}
-    void ConnectionManager::PublishMessage(PublishableResourceHeader const& Message)
+    void ConnectionManager::PublishMessage(PublishableResourceHeader PublishedMessage)
     {
+        NewMessage NotificationToSend;
+        NotificationToSend.Content = std::move(PublishedMessage.Content);
+        NotificationToSend.Header.Type = PublishedMessage.Type;
+        NotificationToSend.Header.UpType = PublishedMessage.UpType;
+        NotificationToSend.Header.TimeStamp = 0;
+        NotificationToSend.Header.ContentSize = NotificationToSend.Content.size();
+        NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
+        NotificationToSend.Header.ParentHash = std::move(PublishedMessage.ParentHash);
+        NotificationToSend.Header.ContentHash = std::move(PublishedMessage.ContentHash);
+        NotificationToSend.Header.Uploader = m_State->HostID;
 
+        std::vector<PeerInfo> DBPeers;
+        {
+            std::lock_guard Lock(m_State->StateMutex);
+            auto PeerIt = m_State->PeerSubscriptions.find(NotificationToSend.Header.OriginalDatabaseHash.Content);
+            if(PeerIt != m_State->PeerSubscriptions.end())
+            {
+                for(auto const& Peer : PeerIt->second)
+                {
+                    DBPeers.push_back(Peer);
+                }
+            }
+        }
+        for(auto const& Peer : DBPeers)
+        {
+            m_State->UDP->SendNotification(Peer,NotificationToSend);
+        }
     }
     MBUtility::Future<MBParsing::JSONObject> ConnectionManager::SendPeerRPC(ID const& PeerID,
             MBParsing::JSONObject ObjectToSend)
@@ -590,6 +621,7 @@ namespace MBChat2
                 {
                     //AddTask<SyncDBTask>(Location,MessageNotification.Header);
                     AddResourceToDB(MessageNotification.Header,MessageNotification.Content);
+                    ResourceRecievedCallback(MessageNotification);
                 }
                 else
                 {
@@ -605,6 +637,7 @@ namespace MBChat2
                                 UDP->SendNotification(Peer,MessageNotification);
                             }
                         }
+                        ResourceRecievedCallback(MessageNotification);
                     }
                 }
             }
@@ -721,10 +754,6 @@ namespace MBChat2
         }
         auto Result = DB.GetAllRows(Stmt);
 
-        if(ResourceRecievedCallback && ResourceInDB(Header.HeaderHash) )
-        {
-            ResourceRecievedCallback(Header);
-        }
     }
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)
     {

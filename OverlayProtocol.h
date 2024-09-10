@@ -249,7 +249,6 @@ namespace MBChat2
     };
     struct ResourceContent
     {
-        Key Uploader;
         ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         Hash ParentHash;
@@ -257,13 +256,12 @@ namespace MBChat2
     };
     struct PublishableResourceHeader
     {
-        Key Uploader;
         ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         Hash DatabaseHash;
         Hash ParentHash;
         Hash ContentHash;
-        uint64_t ResourceSize = 0;
+        std::string Content;
     };
     
     //Messages
