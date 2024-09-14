@@ -32,7 +32,7 @@ namespace MBChat2
         //MBCL
         std::shared_ptr<MBDB::MrBoboDatabase> m_LocalDB;
 
-        
+        std::vector<MBUtility::MOFunction<void()>> m_RecievedEvents;
         struct DBVisualiserInfo
         {
             std::shared_ptr<DBConnection> Connection;
@@ -79,9 +79,10 @@ namespace MBChat2
         void p_DisplayError(std::string const& ErrorMessage);
 
         void p_AddVisualiser(ID const& DatabaseID);
+
+
         void p_ResourceRecievedHandler(NewMessage const& Header);
         void p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response);
-
         std::vector<std::string> p_TokenizeCommand(std::string const& NewCommand);
         void p_HandleCommandString(std::string const& NewCommand);
         void p_HandleEvent(MBCLI::TTYEvent const& NewInput);

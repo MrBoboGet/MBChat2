@@ -25,6 +25,7 @@ namespace MBChat2
         Key PeerID;
         uint32_t IP = 0;
         uint16_t PeerPort = 0;
+        uint16_t PeerRegularPort = 0;
         uint16_t LocalPort = 0;
     };
     class Connection;
@@ -138,10 +139,6 @@ namespace MBChat2
     };
 
 
-    ID Distance(ID const& Lhs,ID const& Rhs);
-    std::string IDToString(ID const& IDToConvert);
-    ID StringToID(std::string const& StringToConvert);
-    std::string BlobToString(ID const& IDToConvert);
 
 
 
@@ -403,10 +400,11 @@ namespace MBChat2
             ConnectionFailedCallback m_ConnectionFailedCallback;
         public:
 
-            InitializeConnection(PeerInfo TargetPeer,ConnectionCallback Succeeded,ConnectionFailedCallback Failed)
+            InitializeConnection(PeerInfo TargetPeer,PeerInfo HostInfo,ConnectionCallback Succeeded,ConnectionFailedCallback Failed)
             {
                 m_TargetPeer = std::move(TargetPeer);
                 m_Request.HostPort = 1338;
+                m_Request.HostInfo = std::move(HostInfo);
 
                 m_ConnectionSucceedCallback = std::move(Succeeded);
                 m_ConnectionFailedCallback = std::move(Failed);
@@ -439,6 +437,7 @@ namespace MBChat2
                 Params.IP = m_TargetPeer.IP;
                 Params.PeerPort = AcceptedConnection.HostPort;
                 Params.LocalPort = m_Request.HostPort;
+                Params.PeerID.Content = IDToString(m_TargetPeer.ID.Content);
                 auto NewConnection = std::make_shared<Connection>(std::move(Params),GetState().GetTCPMessageHandler(),
                             [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
                                 std::lock_guard Lock(ThisTask->GetState().StateMutex);
@@ -462,6 +461,7 @@ namespace MBChat2
             //and fall back to sending it directly 
             ID m_DBID;
             PeerInfo m_TargetPeer;
+            PeerInfo m_HostInfo;
         public:
             //SyncDBTask(MessageLocation InitialLocation,ResourceHeader HeaderToDownload)
             //{
@@ -479,8 +479,14 @@ namespace MBChat2
             }
             void Init()
             {
+                PeerInfo HostInfo;
+                {
+                    std::lock_guard Lock(GetState().StateMutex);
+                    HostInfo = GetState().HostInfo;
+                }
                 GetState().AddTask<InitializeConnection>(
                         m_TargetPeer,
+                        HostInfo,
                         MakeCallback<std::shared_ptr<Connection>>(),
                         MakeCallback<PeerInfo const&>());
             }

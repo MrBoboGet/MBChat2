@@ -41,6 +41,10 @@ namespace MBChat2
     };
 
 
+    ID Distance(ID const& Lhs,ID const& Rhs);
+    std::string IDToString(ID const& IDToConvert);
+    ID StringToID(std::string const& StringToConvert);
+
     template<MessageType Type>
     struct MessageBase
     {
@@ -174,20 +178,30 @@ namespace MBChat2
         Hash Uploader;
         Signature Sig;
 
-
         template<typename T>
-        friend void Parse(T& Stream,ResourceHeader& Value,uint16_t Version)
+        friend void ParseHashedContent(T& Stream,ResourceHeader& Value,uint16_t Version)
         {
             Stream & Value.Type;
             Stream & Value.UpType;
             Stream & Value.TimeStamp;
             Stream & Value.ContentSize;
-
             Parse(Stream,Value.OriginalDatabaseHash,Version);
             Parse(Stream,Value.ParentHash,Version);
             Parse(Stream,Value.ContentHash,Version);
             Parse(Stream,Value.Uploader,Version);
             Parse(Stream,Value.Sig,Version);
+        }
+        ID CalculateHeaderHash()
+        {
+            std::string OutContent;
+            MBUtility::MBStringOutputStream OutStream(OutContent);
+            ParseHashedContent(OutStream,*this,0);
+            return StringToID(MBCrypto::HashData(OutContent,MBCrypto::HashFunction::SHA256));
+        }
+        template<typename T>
+        friend void Parse(T& Stream,ResourceHeader& Value,uint16_t Version)
+        {
+            ParseHashedContent(Stream,Value,Version);
             Parse(Stream,Value.HeaderHash,Version);
         }
         template<typename T>

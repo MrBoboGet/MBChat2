@@ -321,7 +321,7 @@ namespace MBChat2
         //std::unordered_map<uint32_t,std::uno
     public:
 
-        UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler);
+        UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler,UDPNotificationHandler NotificationHandler);
         UDPHandler();
         
         template<typename MessageType>
@@ -332,6 +332,7 @@ namespace MBChat2
             MBUtility::MBStringOutputStream OutStream(NewMessage.SerializedContent);
             OutStream & UDPMessageType::Notification;
             OutStream & NewMessage.ID;
+            OutStream & Message.type;
             Parse(OutStream,Message);
             NewMessage.IP = Peer.IP;
             NewMessage.Port = Peer.ListeningPort;
@@ -376,7 +377,6 @@ namespace MBChat2
             }
             return ReturnValue;
         }
-
         void SetNotificationHandler(UDPNotificationHandler Handler);
         void SetRequestHandler(UDPRequestHandler Handler);
     };

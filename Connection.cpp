@@ -25,7 +25,7 @@ namespace MBChat2
                     //message silently dropped, should reduce trust for peer or something
                     continue;
                 }
-                std::cout<<"TCP message recieved"<<std::endl;
+                //std::cout<<"TCP message recieved"<<std::endl;
                 ResponseHandler Handler;
                 {
                     std::lock_guard Lock(State->SendMutex);
@@ -172,6 +172,11 @@ namespace MBChat2
         MBTCP::TCPConnectionParameters Params;
         Params.DestinationPort = Peer.PeerPort;
         Params.HostPort = Peer.LocalPort;
+
+        m_SharedState->Peer.ListeningPort = Peer.PeerRegularPort;
+        m_SharedState->Peer.ID = StringToID(Peer.PeerID.Content);
+        m_SharedState->Peer.IP = Peer.IP;
+
         m_SharedState->Transport = std::make_unique<MBTCP::MBTCP>(Params, MBUtility::SmartPtr(std::move(UDPStream)));
         m_SharedState->GenericMessageHandler = std::move(MessageHandler);
         m_SharedState->ReadThread = std::thread(Connection::p_ReadThread,m_SharedState);
@@ -206,29 +211,6 @@ namespace MBChat2
         ReturnValue.resize(String.size());
         std::memcpy(ReturnValue.data(),String.data(),String.size());
         return ReturnValue;
-    }
-    ID Distance(ID const& Lhs,ID const& Rhs)
-    {
-        assert(Lhs.size() == Rhs.size());
-        ID ReturnValue = ID(Lhs.size(),0);
-        for(size_t i = 0; i < Lhs.size();i++)
-        {
-            ReturnValue[i] = Lhs[i] ^ Rhs[i];
-        }
-        return  ReturnValue;
-    }
-    std::string IDToString(ID const& IDToConvert)
-    {
-        std::string ReturnValue(IDToConvert.size(),0);
-        std::memcpy(ReturnValue.data(),IDToConvert.data(),IDToConvert.size());
-
-        return  ReturnValue;
-    }
-    ID StringToID(std::string const& StringToConvert)
-    {
-        ID ReturnValue(StringToConvert.size(),0);
-        std::memcpy(ReturnValue.data(),StringToConvert.data(),StringToConvert.size());
-        return  ReturnValue;
     }
     //void KademliaTree::p_FillClosest(TreeNode const& Node,std::vector<PeerInfo>& OutInfo,ID const& TargetID,int k)
     //{
@@ -397,15 +379,16 @@ namespace MBChat2
     void ConnectionManager::PublishMessage(PublishableResourceHeader PublishedMessage)
     {
         NewMessage NotificationToSend;
-        NotificationToSend.Content = std::move(PublishedMessage.Content);
         NotificationToSend.Header.Type = PublishedMessage.Type;
         NotificationToSend.Header.UpType = PublishedMessage.UpType;
         NotificationToSend.Header.TimeStamp = 0;
         NotificationToSend.Header.ContentSize = NotificationToSend.Content.size();
+        NotificationToSend.Content = std::move(PublishedMessage.Content);
         NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
         NotificationToSend.Header.ParentHash = std::move(PublishedMessage.ParentHash);
         NotificationToSend.Header.ContentHash = std::move(PublishedMessage.ContentHash);
         NotificationToSend.Header.Uploader = m_State->HostID;
+        NotificationToSend.Header.HeaderHash = NotificationToSend.Header.CalculateHeaderHash();
 
         std::vector<PeerInfo> DBPeers;
         {
@@ -421,7 +404,10 @@ namespace MBChat2
         }
         for(auto const& Peer : DBPeers)
         {
-            m_State->UDP->SendNotification(Peer,NotificationToSend);
+            if(Peer.IP != 0)
+            {
+                m_State->UDP->SendNotification(Peer,NotificationToSend);
+            }
         }
     }
     MBUtility::Future<MBParsing::JSONObject> ConnectionManager::SendPeerRPC(ID const& PeerID,
@@ -459,7 +445,7 @@ namespace MBChat2
             auto ClosestPeer = m_State->Peers.FindClosest(PeerID,1);
             if(ClosestPeer.size() > 0 && ClosestPeer[0].ID.Content == PeerID)
             {
-                m_State->AddTask<InitializeConnection>(ClosestPeer[0],
+                m_State->AddTask<InitializeConnection>(ClosestPeer[0],m_State->HostInfo,
                         [State=m_State,Message = std::move(NewMessage),MessageCallback=std::move(Callback),Promise=Promise]
                         (std::shared_ptr<Connection> NewConnection) mutable
                         {
@@ -479,7 +465,7 @@ namespace MBChat2
                         {
                             if(ClosestPeers.size() > 0 && ClosestPeers[0].ID.Content == ID)
                             {
-                                State->AddTask<InitializeConnection>(ClosestPeers[0],
+                                State->AddTask<InitializeConnection>(ClosestPeers[0],State->HostInfo,
                                         [State=State,Message = std::move(Message),MessageCallback=std::move(MessageCallback),Promise=Promise]
                                         (std::shared_ptr<Connection> NewConnection) mutable
                                         {
@@ -686,8 +672,8 @@ namespace MBChat2
         {
             auto const& KeyRequest = Request.GetType<GetPeerKey>();
             GetPeerKey_Response& KeyResponse = Response.GetOrAssign<GetPeerKey_Response>();
-            auto Statement = DB.GetSQLStatement("SELECT Key FROM Peers WHERE ID = ?");
-            Statement.BindString(IDToString(KeyRequest.PeerID.Content),1);
+            auto Statement = DB.GetSQLStatement("SELECT Key FROM Peers WHERE ID = :Hash");
+            Statement.BindBlob("Hash",KeyRequest.PeerID.Content);
             auto Result = DB.GetAllRows(Statement);
             if(Result.size() > 0)
             {
@@ -698,13 +684,15 @@ namespace MBChat2
         {
             auto const& ConnectionRequset = Request.GetType<InitConnection>();
             ConnectionParameters Params;
-            Params.IP = ConnectionRequset.HostInfo.IP;
+            Params.IP = Location.IP;
             Params.PeerPort = ConnectionRequset.HostPort;
             Params.LocalPort = 1338;
+            Params.PeerID.Content = IDToString(ConnectionRequset.HostInfo.ID.Content);
+
             auto& ConnectionResponse = Response.GetOrAssign<InitConnection_Response>();
             ConnectionResponse.Accepted = true;
             ConnectionResponse.HostPort = 1338;
-            Params.IP = Location.IP;
+            Params.PeerRegularPort = Location.Port;
 
             {
                 std::lock_guard StateLock = std::lock_guard(StateMutex);
@@ -758,8 +746,8 @@ namespace MBChat2
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)
     {
         bool ReturnValue = true;
-        auto stmt = DB.GetSQLStatement("SELECT Hash FROM Resources WHERE Hash = ?");
-        stmt.BindBlob(Resource.Content,1);
+        auto stmt = DB.GetSQLStatement("SELECT Hash FROM Resources WHERE Hash = :Hash");
+        stmt.BindValue("Hash",Resource.Content);
         auto Result = DB.GetAllRows(stmt);
         return Result.size() > 0;
     }
@@ -799,6 +787,10 @@ namespace MBChat2
         Request.k = 20;
         Request.DBID = Hash();
         Request.DBID.Value().Content = DBID;
+        {
+            std::lock_guard Lock(StateMutex);
+            PeerSubscriptions[DBID].insert(HostInfo);
+        }
         AddTask<FindClosestPeers>(std::move(Request),DBID,
                 [State=shared_from_this(),ID=DBID](std::vector<PeerInfo> const& Peers){ State->AddTask<SyncDBTask>(Peers,ID); });
     }
@@ -817,8 +809,8 @@ namespace MBChat2
                             [State=State,DBID= Request.DBHash](MBUtility::MBOctetOutputStream& OutStream) mutable
                             {
                                 //TODO make into a true row iterator instead
-                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = ?");
-                                Stmt.BindBlob(DBID.Content,1);
+                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash");
+                                Stmt.BindBlob("Hash",DBID.Content);
                                 auto Rows = State->DB.GetAllRows(Stmt);
                                 for(auto const& Row : Rows)
                                 {
@@ -878,6 +870,7 @@ namespace MBChat2
         m_State->ResourceRecievedCallback = std::move(Callback);
         m_State->RPCCallback = std::move(RPCCallback);
         m_State->HostID.Content = Params.LocalID;
+        m_State->HostInfo.ID = Params.LocalID;
 
         auto WeakStatePtr = std::weak_ptr<SharedState>(m_State);
         m_State->UDP = std::make_unique<UDPHandler>(1337,[This=WeakStatePtr](MessageLocation Location,UDPRequest const& Request)
@@ -888,6 +881,14 @@ namespace MBChat2
                         return Shared->RequestHandler(Location,Request);
                     }
                     return UDPResponse();
+                },
+                [This=WeakStatePtr](MessageLocation Location,UDPNotification const& Request)
+                {
+                    auto Shared = This.lock();
+                    if(Shared != nullptr)
+                    {
+                        return Shared->NotificationHandler(Location,Request);
+                    }
                 });
     }
     //std::vector<PeerInfo> ConnectionManager::SharedState::FindDBPeers(ID const&,int k)

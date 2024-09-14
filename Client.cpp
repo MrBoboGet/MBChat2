@@ -221,16 +221,16 @@ namespace MBChat2
                     {
                         auto NewDB = p_CreateChatDB(PeerID,m_LocalID);
                         m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
+                        m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
                         if(!m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
                         {
                             m_ConnectionManager->CreateDB(NewDB);
-                            m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
                         }
                         p_AddVisualiser(NewDB.DatabaseID.Content);
                     }
                     catch(std::exception const& e)
                     {
-                        std::cout<<e.what()<<std::endl;
+                        //std::cout<<e.what()<<std::endl;
                     }
                 });
     }
@@ -256,33 +256,43 @@ namespace MBChat2
     }
     void Client::p_ResourceRecievedHandler(NewMessage const& Header)
     {
-        auto It = m_ActiveVisualiser.find(Header.Header.OriginalDatabaseHash.Content);
-        if(It != m_ActiveVisualiser.end())
-        {
-            for(auto& Visualiser : It->second.Visualiser)
-            {
-                Visualiser->ResourcePublished(Header);
-            }
-        }
+        std::lock_guard Lock(m_InternalsMutex);
+        m_RecievedEvents.push_back([&,Header=Header]()
+                {
+                    auto It = m_ActiveVisualiser.find(Header.Header.OriginalDatabaseHash.Content);
+                    if(It != m_ActiveVisualiser.end())
+                    {
+                        for(auto& Visualiser : It->second.Visualiser)
+                        {
+                            Visualiser->ResourcePublished(Header);
+                        }
+                    }
+                });
+        m_Terminal.CancelRead();
     }
     void Client::p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response)
     {
-        if(Object["method"].GetStringData() == "startChat")
-        {
-            try
-            {
-                auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
-                m_ConnectionManager->CreateDB(NewDB);
-                m_ConnectionManager->AddDBPeer(Peers,NewDB.DatabaseID.Content);
-                m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
-                p_AddVisualiser(NewDB.DatabaseID.Content);
-            }
-            catch(...)
-            {
-                    
-            }
-            Response.SetValue(MBParsing::JSONObject(MBParsing::JSONObjectType::Aggregate));
-        }
+        std::lock_guard Lock(m_InternalsMutex);
+        m_RecievedEvents.push_back([&,Peers=Peers,Object=Object,Response=std::move(Response)] () mutable
+                {
+                    if(Object["method"].GetStringData() == "startChat")
+                    {
+                        try
+                        {
+                            auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
+                            m_ConnectionManager->CreateDB(NewDB);
+                            m_ConnectionManager->AddDBPeer(Peers,NewDB.DatabaseID.Content);
+                            m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                            p_AddVisualiser(NewDB.DatabaseID.Content);
+                        }
+                        catch(...)
+                        {
+                                
+                        }
+                        Response.SetValue(MBParsing::JSONObject(MBParsing::JSONObjectType::Aggregate));
+                    }
+                });
+        m_Terminal.CancelRead();
     }
     int Client::Run()
     {
@@ -335,8 +345,9 @@ namespace MBChat2
         auto IDContent = MBUtility::ReadWholeFile(MBUnicode::PathToUTF8(ConfigPath/"id"));
         m_LocalID.resize(IDContent.size());
         std::memcpy(m_LocalID.data(),IDContent.data(),IDContent.size());
-
-        m_ConnectionManager = std::make_shared<ConnectionManager>(IDParameters(),
+        IDParameters Params;
+        Params.LocalID = m_LocalID;
+        m_ConnectionManager = std::make_shared<ConnectionManager>(Params,
                 MBUnicode::PathToUTF8(DBPath),
                 [&](NewMessage const& Resource ){p_ResourceRecievedHandler(Resource);},
                 [&](PeerInfo const&  Peer,MBParsing::JSONObject const& Object, MBUtility::Promise<MBParsing::JSONObject> Obj )
@@ -401,7 +412,14 @@ namespace MBChat2
         {
             auto NewInput = m_Terminal.GetNextEvent();
 
-            std::lock_guard Lock(m_InternalsMutex);
+            {
+                std::lock_guard Lock(m_InternalsMutex);
+                for(auto& Event : m_RecievedEvents)
+                {
+                    Event();
+                }
+                m_RecievedEvents.clear();
+            }
             p_HandleEvent(NewInput);
 
             auto NewBuffer = m_TopLayerer.GetBuffer();

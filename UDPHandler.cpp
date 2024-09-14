@@ -2,8 +2,8 @@
 
 namespace MBChat2
 {
-    UDPHandler::UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler)
-        : m_Socket(ListenPort),m_RequestHandler(std::move(RequestHandler))
+    UDPHandler::UDPHandler(uint16_t ListenPort,UDPRequestHandler RequestHandler,UDPNotificationHandler NotificationHandler)
+        : m_Socket(ListenPort),m_RequestHandler(std::move(RequestHandler)),m_NotificationHandler(std::move(NotificationHandler))
     {
         m_ListenThread = std::thread(&UDPHandler::p_ReadThread,this);
     }
@@ -32,7 +32,7 @@ namespace MBChat2
             std::string Buffer(m_Socket.ReadMaxPacketSize(),0);
             MBSockets::UDPSource Source;
             size_t RequestSize = m_Socket.ReadPacket(Source,Buffer.data(),Buffer.size(),WaitTimer);
-            std::cout<< "Packet recieved"<<std::endl;
+            //std::cout<< "Packet recieved"<<std::endl;
             MessageLocation Location;
             Location.IP  = Source.IP;
             Location.Port  = Source.Port;
