@@ -78,16 +78,18 @@ namespace MBChat2
         static void p_SendThread(std::shared_ptr<State> State);
 
         std::shared_ptr<State> m_SharedState;
+        ConnectionParameters m_Params;
     public:
         ~Connection();
 
-        Connection(ConnectionParameters Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
+        Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> PacketStream,ConnectionParameters Params,PeerInfo Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
 
 
         void SendResponse(MessageHeader const& RecievedMessage,Message Response);
         void SendStreamedResponse(MessageHeader const& RecievedMessage,MessageType Type,StreamedResponseHandler Handler);
 
         void SendMessage(Message MessageToSend,MessageCallback Callback);
+        uint16_t GetLocalPort();
 
         template<typename MessageType,typename FuncType>
         void SendStreamingMessage(MessageContent MessageToSend,FuncType Func)
@@ -394,6 +396,7 @@ namespace MBChat2
             InitConnection m_Request;
             PeerInfo m_TargetPeer;
             std::shared_ptr<Connection> m_ResultConnection;
+            std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection;
             std::atomic<bool> m_Active = true;
 
             ConnectionCallback m_ConnectionSucceedCallback;
@@ -402,9 +405,10 @@ namespace MBChat2
 
             InitializeConnection(PeerInfo TargetPeer,PeerInfo HostInfo,ConnectionCallback Succeeded,ConnectionFailedCallback Failed)
             {
-                m_TargetPeer = std::move(TargetPeer);
-                m_Request.HostPort = 1338;
+                m_TargetPeer = TargetPeer;
                 m_Request.HostInfo = std::move(HostInfo);
+                m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
+                m_Request.HostPort = m_UDPConnection->GetBoundPort();
 
                 m_ConnectionSucceedCallback = std::move(Succeeded);
                 m_ConnectionFailedCallback = std::move(Failed);
@@ -438,12 +442,17 @@ namespace MBChat2
                 Params.PeerPort = AcceptedConnection.HostPort;
                 Params.LocalPort = m_Request.HostPort;
                 Params.PeerID.Content = IDToString(m_TargetPeer.ID.Content);
-                auto NewConnection = std::make_shared<Connection>(std::move(Params),GetState().GetTCPMessageHandler(),
-                            [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
-                                std::lock_guard Lock(ThisTask->GetState().StateMutex);
-                                ThisTask->GetState().
-                                ActiveConnections.erase(ThisTask->GetState().ActiveConnections.find(ID));
-                            });
+                m_UDPConnection->SetDstPort(AcceptedConnection.HostPort);
+                auto NewConnection = std::make_shared<Connection>(
+                        std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
+                        std::move(Params),
+                        m_TargetPeer,
+                        GetState().GetTCPMessageHandler(),
+                        [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
+                            std::lock_guard Lock(ThisTask->GetState().StateMutex);
+                            ThisTask->GetState().
+                            ActiveConnections.erase(ThisTask->GetState().ActiveConnections.find(ID));
+                        });
 
 
                 {

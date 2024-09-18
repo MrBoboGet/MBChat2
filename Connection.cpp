@@ -141,6 +141,10 @@ namespace MBChat2
         NewMessage.ResponseCallback = std::move(Callback);
         m_SharedState->SendConditional.notify_one();
     }
+    uint16_t Connection::GetLocalPort()
+    {
+        return m_Params.LocalPort;
+    }
     void Connection::SendResponse(MessageHeader const& RecievedMessage,Message Response)
     {
         std::lock_guard Lock(m_SharedState->SendMutex);
@@ -165,18 +169,15 @@ namespace MBChat2
         RawMessage.Handler = std::move(Handler);
         m_SharedState->SendConditional.notify_one();
     }
-    Connection::Connection(ConnectionParameters Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler)
+    Connection::Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> UDPStream,ConnectionParameters ConnectionParams,PeerInfo Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler)
     {
-        std::unique_ptr<MBUtility::BidirectionalPacketStream> UDPStream = std::make_unique<MBSockets::UDPSocket>(Peer.IP,Peer.PeerPort,Peer.LocalPort);
         m_SharedState = std::make_shared<State>();
         MBTCP::TCPConnectionParameters Params;
-        Params.DestinationPort = Peer.PeerPort;
-        Params.HostPort = Peer.LocalPort;
+        Params.DestinationPort = 1337;
+        Params.HostPort = 1337;
+        m_Params = ConnectionParams;
 
-        m_SharedState->Peer.ListeningPort = Peer.PeerRegularPort;
-        m_SharedState->Peer.ID = StringToID(Peer.PeerID.Content);
-        m_SharedState->Peer.IP = Peer.IP;
-
+        m_SharedState->Peer =  std::move(Peer);
         m_SharedState->Transport = std::make_unique<MBTCP::MBTCP>(Params, MBUtility::SmartPtr(std::move(UDPStream)));
         m_SharedState->GenericMessageHandler = std::move(MessageHandler);
         m_SharedState->ReadThread = std::thread(Connection::p_ReadThread,m_SharedState);
@@ -699,12 +700,23 @@ namespace MBChat2
                 auto It = ActiveConnections.find(ConnectionRequset.HostInfo.ID.Content);
                 if(It == ActiveConnections.end())
                 {
-                    auto NewConnection = std::make_shared<Connection>(std::move(Params),GetTCPMessageHandler(),
+                    std::unique_ptr<MBSockets::UDPSocket> UDPStream = std::make_unique<MBSockets::UDPSocket>(Params.IP,Params.PeerPort,0);
+                    Params.LocalPort = UDPStream->GetBoundPort();
+                    ConnectionResponse.HostPort = UDPStream->GetBoundPort();
+                    PeerInfo Peer;
+                    Peer.ListeningPort = Params.PeerRegularPort;
+                    Peer.ID = ConnectionRequset.HostInfo.ID.Content;
+                    Peer.IP = Params.IP;
+                    auto NewConnection = std::make_shared<Connection>(std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(UDPStream)),Params  ,std::move(Peer),GetTCPMessageHandler(),
                             [ID=ConnectionRequset.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
                                 std::lock_guard Lock(ThisTask->StateMutex);
                                 ThisTask->ActiveConnections.erase(ThisTask->ActiveConnections.find(ID));
                             });
                     ActiveConnections[ConnectionRequset.HostInfo.ID.Content] = NewConnection;
+                }
+                else
+                {
+                    ConnectionResponse.HostPort = It->second->GetLocalPort();
                 }
             }
         }
