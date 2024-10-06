@@ -301,14 +301,13 @@ namespace MBChat2
         };
         struct StoredCallback
         {
-            uint32_t IP;
             MBUtility::MOFunction<void (UDPResponse const& Response)> Callback;
         };
 
         std::vector<StoredMessage> m_SentMessages;
         std::atomic<bool> m_Stopping = false;
         std::atomic<uint32_t> m_NextMessageID;
-        std::unordered_map<uint32_t,StoredCallback> m_ResponseCallbacks;
+        std::unordered_map<uint32_t,std::unordered_map<uint32_t,StoredCallback>> m_ResponseCallbacks;
         MBSockets::UDPSocket m_Socket;
         MBUtility::ThreadPool m_ThreadPool = MBUtility::ThreadPool(1);
 
@@ -337,8 +336,7 @@ namespace MBChat2
             NewMessage.IP = Peer.IP;
             NewMessage.Port = Peer.ListeningPort;
             std::lock_guard Lock(m_StateMutex);
-            m_ResponseCallbacks[NewMessage.ID].IP = Peer.IP;
-            m_ResponseCallbacks[NewMessage.ID].Callback = [](UDPResponse const& Response){};
+            m_ResponseCallbacks[Peer.IP][NewMessage.ID].Callback = [](UDPResponse const& Response){};
             NewMessage.RetryTime = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
             p_SendMessage(NewMessage);
             m_SentMessages.push_back(std::move(NewMessage));
@@ -360,8 +358,7 @@ namespace MBChat2
             MBUtility::Future<ResponseType> ReturnValue = Promise.GetFuture();
             {
                 std::lock_guard Lock(m_StateMutex);
-                m_ResponseCallbacks[NewMessage.ID].IP = Peer.IP;
-                m_ResponseCallbacks[NewMessage.ID].Callback = [Promise=std::move(Promise)] (UDPResponse const& Response) mutable{
+                m_ResponseCallbacks[Peer.IP][NewMessage.ID].Callback = [Promise=std::move(Promise)] (UDPResponse const& Response) mutable{
                     if(!Response.IsType<ResponseType>())
                     {
                         Promise.SetInvalid();

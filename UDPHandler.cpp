@@ -1,4 +1,5 @@
 #include "UDPHandler.h"
+#include <unordered_set>
 
 namespace MBChat2
 {
@@ -25,8 +26,9 @@ namespace MBChat2
         typedef std::chrono::steady_clock Time;
         typedef std::chrono::milliseconds ms;
         typedef std::chrono::duration<float> fsec;
-
-        double WaitTimer = 0.5;
+        
+        std::unordered_map<uint32_t,std::unordered_set<uint32_t>> RecievedResponses;
+        double WaitTimer = 0;
         while(!m_Stopping.load())
         {
             std::string Buffer(m_Socket.ReadMaxPacketSize(),0);
@@ -96,15 +98,20 @@ namespace MBChat2
                     {
                         UDPResponse Response;
                         ReadVariant(InputStream,Response);
-                        auto It = m_ResponseCallbacks.find(ID);
-                        if(It != m_ResponseCallbacks.end() && It->second.IP == Location.IP)
+                        auto PeerIt = m_ResponseCallbacks.find(Location.IP);
+                        if(PeerIt != m_ResponseCallbacks.end())
                         {
-                            auto Callback = std::move(It->second.Callback);
-                            m_ResponseCallbacks.erase(It);
-                            m_ThreadPool.AddTask([&,Response=Response,Callback= std::move(Callback)] () mutable
-                                    {
-                                        Callback(Response);
-                                    });
+                            auto It = PeerIt->second.find(ID);
+                            if(It != PeerIt->second.end())
+                            {
+                                auto Callback = std::move(It->second.Callback);
+                                PeerIt->second.erase(It);
+                                m_ThreadPool.AddTask([&,Response=Response,Callback= std::move(Callback)] () mutable
+                                        {
+                                            Callback(Response);
+                                        });
+                                RecievedResponses[Location.IP].insert(ID);
+                            }
                         }
                     }
                 }
@@ -118,18 +125,38 @@ namespace MBChat2
             while(m_SentMessages.size() > 0 && m_SentMessages.front().RetryTime <= CurrentTime)
             {
                 auto& MessageToSend = m_SentMessages.front();
-                if(MessageToSend.AttemptedRetries < MessageToSend.MaxRetries)
+                bool ResponseRecieved = false;
+                auto IpIt = RecievedResponses.find(MessageToSend.IP);
+                decltype(IpIt->second.begin()) IdIt;
+                if(IpIt != RecievedResponses.end())
+                {
+                    IdIt = IpIt->second.find(MessageToSend.ID);
+                    if(IdIt != IpIt->second.end())
+                    {
+                        ResponseRecieved = true;
+                    }
+                }
+                if(MessageToSend.AttemptedRetries < MessageToSend.MaxRetries && !ResponseRecieved)
                 {
                     p_SendMessage(MessageToSend);
                     MessageToSend.AttemptedRetries += 1;
                     MessageToSend.RetryTime = CurrentTime + std::chrono::milliseconds(500);
+                    WaitTimer = 0.5;
                     std::make_heap(m_SentMessages.begin(),m_SentMessages.end());
                 }
                 else
                 {
                     std::pop_heap(m_SentMessages.begin(),m_SentMessages.end(),std::greater<StoredMessage>());
                     m_SentMessages.resize(m_SentMessages.size()-1);
+                    if(ResponseRecieved)
+                    {
+                        IpIt->second.erase(IdIt);
+                    }
                 }
+            }
+            if(m_SentMessages.size() == 0)
+            {
+                WaitTimer = 0;
             }
         }
     }

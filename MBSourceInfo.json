@@ -6,6 +6,7 @@
         "MBTUI",
         "MrBoboSockets",
         "MrBoboDatabase",
+        "MBUPNP",
         "MBTCP"
     ],
     "ExtraIncludes": 
@@ -26,6 +27,7 @@
                 "/Connection.cpp",
                 "/DBConnection.cpp",
                 "/DBVisualiser.cpp",
+                "/Config.cpp",
                 "/UDPHandler.cpp",
                 "/MBChat_Main.cpp"
             ],
@@ -39,6 +41,7 @@
                 "/OverlayProtocol.cpp",
                 "/Client.cpp",
                 "/DBConnection.cpp",
+                "/Config.cpp",
                 "/UDPHandler.cpp",
                 "/DBVisualiser.cpp",
                 "/Connection.cpp"

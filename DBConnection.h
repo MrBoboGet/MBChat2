@@ -25,10 +25,8 @@ namespace MBChat2
             m_Database = std::move(Database);
             m_DatabaseID = std::move(DatabaseID);
         }
-
-        virtual MBUtility::Future<ResourceHeader> GetHeader(Hash const& ResourceHash);
-        virtual MBUtility::Future<ResourceContent> GetContent(Hash const& ResourceHash);
         virtual void UploadResource(ResourceContent NewResource);
+        virtual ID LatestID();
         virtual std::shared_ptr<MBDB::MrBoboDatabase> GetDB();
     };
 }

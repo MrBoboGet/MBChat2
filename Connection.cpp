@@ -4,6 +4,10 @@
 #include <MrBoboSockets/MrBoboSockets.h>
 
 #include <unordered_set>
+#include <chrono>
+
+#include <MBUPNP/MBUPNP.h>
+#include <MBUtility/Async.h>
 
 namespace MBChat2
 {
@@ -321,17 +325,19 @@ namespace MBChat2
     }
     void ConnectionManager::AddDBPeer(ID const& PeerID,ID const& DatabaseID)
     {
-        std::lock_guard StateLock(m_State->StateMutex);
-        auto ClosestPeers = m_State->Peers.FindClosest(PeerID,1);
+        std::vector<PeerInfo> ClosestPeers;
+        {
+            std::lock_guard StateLock(m_State->StateMutex);
+            ClosestPeers = m_State->Peers.FindClosest(PeerID,1);
+        }
         if(ClosestPeers.size() > 0 && ClosestPeers[0].ID == PeerID)
         {
-            m_State->PeerSubscriptions[DatabaseID].insert(ClosestPeers[0]);
+            m_State->AddSubscription(DatabaseID,ClosestPeers[0]);
         }
     }
     void ConnectionManager::AddDBPeer(PeerInfo const& Peer,ID const& DatabaseID)
     {
-        std::lock_guard StateLock(m_State->StateMutex);
-        m_State->PeerSubscriptions[DatabaseID].insert(Peer);
+        m_State->AddSubscription(DatabaseID,Peer);
     }
     void ConnectionManager::CreateDB(DatabaseDefinition const& Definition)
     {
@@ -383,13 +389,15 @@ namespace MBChat2
         NotificationToSend.Header.Type = PublishedMessage.Type;
         NotificationToSend.Header.UpType = PublishedMessage.UpType;
         NotificationToSend.Header.TimeStamp = 0;
-        NotificationToSend.Header.ContentSize = NotificationToSend.Content.size();
+        NotificationToSend.Header.ContentSize = PublishedMessage.Content.size();
         NotificationToSend.Content = std::move(PublishedMessage.Content);
         NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
         NotificationToSend.Header.ParentHash = std::move(PublishedMessage.ParentHash);
         NotificationToSend.Header.ContentHash = std::move(PublishedMessage.ContentHash);
         NotificationToSend.Header.Uploader = m_State->HostID;
         NotificationToSend.Header.HeaderHash = NotificationToSend.Header.CalculateHeaderHash();
+
+        m_State->AddResourceToDB(NotificationToSend.Header,NotificationToSend.Content);
 
         std::vector<PeerInfo> DBPeers;
         {
@@ -458,7 +466,7 @@ namespace MBChat2
                         }
                         );
             }
-            else
+            else if(ClosestPeer.size() > 0)
             {
                 m_State->AddTask<FindClosestPeers>(ClosestPeer[0].ID.Content,
                         [State=m_State,ID = PeerID,Message = std::move(NewMessage),MessageCallback=std::move(Callback),Promise=Promise]
@@ -604,7 +612,7 @@ namespace MBChat2
             }
             {
                 //TODO Verify content
-                if(MessageNotification.Content.size() == 0 || !ResourceInDB(MessageNotification.Header.ParentHash))
+                if(MessageNotification.Content.size() == 0 || !ResourceInDB(MessageNotification.Header.HeaderHash))
                 {
                     //AddTask<SyncDBTask>(Location,MessageNotification.Header);
                     AddResourceToDB(MessageNotification.Header,MessageNotification.Content);
@@ -708,10 +716,12 @@ namespace MBChat2
                     Peer.ID = ConnectionRequset.HostInfo.ID.Content;
                     Peer.IP = Params.IP;
                     auto NewConnection = std::make_shared<Connection>(std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(UDPStream)),Params  ,std::move(Peer),GetTCPMessageHandler(),
-                            [ID=ConnectionRequset.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
+                            [LocalPort=Params.LocalPort,ID=ConnectionRequset.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
                                 std::lock_guard Lock(ThisTask->StateMutex);
+                                ThisTask->PortMapper.RemovePortMapping(LocalPort);
                                 ThisTask->ActiveConnections.erase(ThisTask->ActiveConnections.find(ID));
                             });
+                    PortMapper.AddPortMapping(Params.LocalPort);
                     ActiveConnections[ConnectionRequset.HostInfo.ID.Content] = NewConnection;
                 }
                 else
@@ -726,10 +736,10 @@ namespace MBChat2
     {
         auto Stmt = DB.GetSQLStatement(
                 "INSERT INTO Resources(Hash,ContentType,UpType,Time,ContentSize,DatabaseHash,ParentHash,ContentHash, "
-            "UploaderID,Signature,StoredLocaly,StoredInline,Content) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
-            ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content)");
+            "UploaderID,Signature,StoredLocaly,StoredInline,Content,RecievedTimestamp) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
+            ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content,:LocalTimestamp)");
         //stmt.bind
-        Stmt.BindValue("Hash",Header.ContentHash.Content);
+        Stmt.BindBlob("Hash",Header.HeaderHash.Content);
         Stmt.BindValue("ContentType",Header.Type);
         Stmt.BindValue("UpType",Header.UpType);
         Stmt.BindValue("Timestamp",Header.TimeStamp);
@@ -752,6 +762,7 @@ namespace MBChat2
             Stmt.BindValue("StoredInline",0);
             Stmt.BindNull("Content");
         }
+        Stmt.BindInt("LocalTimestamp",std::chrono::steady_clock::now().time_since_epoch().count());
         auto Result = DB.GetAllRows(Stmt);
 
     }
@@ -783,12 +794,22 @@ namespace MBChat2
         }
         return ReturnValue;
     }
+    void ConnectionManager::SharedState::AddSubscription(ID const& DatabaseID,PeerInfo const& PeerInfo)
+    {
+        {
+            std::lock_guard Lock(StateMutex);
+            PeerSubscriptions[DatabaseID].insert(PeerInfo);
+        }
+        auto Stmt = DB.GetSQLStatement("INSERT INTO Subscriptions(PeerID,DatabaseID) VALUES (:PeerID,:DatabaseID)");
+        Stmt.BindBlob("PeerID",PeerInfo.ID.Content);
+        Stmt.BindBlob("DatabaseID",DatabaseID);
+        DB.GetAllRows(Stmt);
+    }
     void ConnectionManager::SharedState::AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions)
     {
-        std::lock_guard Lock(StateMutex);
         for(auto const& Subscription : Subscriptions)
         {
-            PeerSubscriptions[Subscription.Content].insert(Peer);
+            AddSubscription(Subscription.Content,Peer);
         }
     }
     void ConnectionManager::SharedState::AddJoinDBTask(ID const& DBID)
@@ -800,8 +821,7 @@ namespace MBChat2
         Request.DBID = Hash();
         Request.DBID.Value().Content = DBID;
         {
-            std::lock_guard Lock(StateMutex);
-            PeerSubscriptions[DBID].insert(HostInfo);
+            AddSubscription(DBID,HostInfo);
         }
         AddTask<FindClosestPeers>(std::move(Request),DBID,
                 [State=shared_from_this(),ID=DBID](std::vector<PeerInfo> const& Peers){ State->AddTask<SyncDBTask>(Peers,ID); });
@@ -876,7 +896,7 @@ namespace MBChat2
             }
         };
     }
-    ConnectionManager::ConnectionManager(IDParameters Params,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback)
+    ConnectionManager::ConnectionManager(IDParameters Params,uint16_t ListenPort,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback)
     {
         m_State = std::make_shared<SharedState>(DatabasePath);
         m_State->ResourceRecievedCallback = std::move(Callback);
@@ -884,8 +904,26 @@ namespace MBChat2
         m_State->HostID.Content = Params.LocalID;
         m_State->HostInfo.ID = Params.LocalID;
 
+        //Retrieve all subscriptions
+        auto Subscriptions = m_State->DB.GetAllRows("SELECT DatabaseID,PeerID,IP,Port FROM Subscriptions LEFT JOIN Peers "
+                "ON PeerID=ID");
+        m_State->PortMapper.AddPortMapping(ListenPort);
+        for(auto& Row : Subscriptions)
+        {
+            PeerInfo NewInfo;
+            NewInfo.ID = StringToID(std::get<std::string>(Row["PeerID"]));
+            if(std::holds_alternative<MBDB::IntType>(Row["Port"]))
+            {
+                NewInfo.ListeningPort = std::get<MBDB::IntType>(Row["Port"]);
+            }
+            if(std::holds_alternative<MBDB::IntType>(Row["IP"]))
+            {
+                NewInfo.IP = std::get<MBDB::IntType>(Row["IP"]);
+            }
+            m_State->PeerSubscriptions[StringToID(std::get<std::string>(Row["DatabaseID"]))].insert(std::move(NewInfo));
+        }
         auto WeakStatePtr = std::weak_ptr<SharedState>(m_State);
-        m_State->UDP = std::make_unique<UDPHandler>(1337,[This=WeakStatePtr](MessageLocation Location,UDPRequest const& Request)
+        m_State->UDP = std::make_unique<UDPHandler>(ListenPort,[This=WeakStatePtr](MessageLocation Location,UDPRequest const& Request)
                 {
                     auto Shared = This.lock();
                     if(Shared != nullptr)
@@ -903,6 +941,155 @@ namespace MBChat2
                     }
                 });
     }
+
+
+
+    //
+
+    AsyncUDPMapper::AsyncUDPMapper()
+    {
+        m_State = std::make_shared<SharedState>();
+        m_State->NotifyThread = std::thread(p_NotifyThread,m_State);
+    }
+    void AsyncUDPMapper::p_NotifyThread(std::shared_ptr<SharedState> State)
+    {
+        try{
+            uint32_t LocalIP = 0;
+            {
+                //arbitrary IP, just need to be connected in order to get local interface IP
+                MBSockets::UDPSocket NewSocket(MBSockets::StringToIP("8.8.8.8"),1337,1337);
+                NewSocket.Connect();
+                LocalIP = NewSocket.GetLocalIP();
+            }
+            auto Discoverer = std::make_shared<MBUPNP::UDPDiscoverer>();
+            auto Devices = Discoverer->FindDevices(5);
+            MBUPNP::Device WanDevice;
+            for(auto const& Device : Devices)
+            {
+                for(auto const& Service : Device.Services)
+                {
+                    if(Service.Info.ServiceName == "WANIPConnection")
+                    {
+                        //IPService = std::make_unique<MBUPNP::WANIPConnectionService>(Device);
+                        WanDevice = Device;
+                        break;
+                    }
+                }
+                if(WanDevice.DeviceType != "")
+                {
+                    break;   
+                }
+            }
+            if(WanDevice.DeviceType == "")
+            {
+                //do some error handling...
+                //
+                State->Stopping.store(true);
+                return;
+            }
+            MBUtility::Async<MBUPNP::WANIPConnectionService> IPService(WanDevice);
+            std::vector<Mapping> ActiveMappings;
+            std::unordered_set<uint16_t> RemovedMappings;
+            std::unordered_set<uint16_t> MappedPorts;
+            double SleepDuration = 0;
+            double LeaseDuration = 120;
+            double LeaseMargin = 10;
+
+            auto Heapify = [](std::vector<Mapping>& Target)
+            {
+                std::make_heap(Target.begin(),Target.end(),std::greater<Mapping>());
+            };
+            auto Pop = [](std::vector<Mapping>& Target)
+            {
+                if(Target.size() > 0)
+                {
+                    std::pop_heap(Target.begin(),Target.end(),std::greater<Mapping>());
+                    Target.resize(Target.size()-1);
+                }
+            };
+            while(!State->Stopping.load())
+            {
+                std::unique_lock Lock(State->InternalsMutex);
+                while(!State->Stopping.load() && (State->RequestedMappings.size() == 0 && State->RequestedMappings.size() == 0))
+                {
+                    State->NewMappingConditional.wait(Lock);
+                }
+                for(auto NewMapping : State->RequestedMappings)
+                {
+                    //uint32_t ExternalHost,uint16_t ExternalPort,Protocol Protocol,uint16_t InternalPort,uint32_t InternalClient,bool Enabled,std::string const& Description,int Duration);
+                    if(MappedPorts.find(NewMapping) == MappedPorts.end())
+                    {
+                        IPService.AddTask(&MBUPNP::WANIPConnectionService::AddPortMapping,0,NewMapping,MBUPNP::Protocol::UDP,NewMapping,LocalIP,true,"MBChat2 - direct connection",LeaseDuration);
+                        Mapping& CurrentMapping = ActiveMappings.emplace_back();
+                        CurrentMapping.MappedPort = NewMapping;
+                        CurrentMapping.LastMapped = std::chrono::steady_clock::now();
+                        CurrentMapping.LeaseDuration = LeaseDuration;
+                        MappedPorts.insert(NewMapping);
+                        Heapify(ActiveMappings);
+                    }
+                }
+                State->RequestedMappings.clear();
+                for(auto Mapping : State->RequestedRemovals)
+                {
+                    if(MappedPorts.find(Mapping) == MappedPorts.end())
+                    {
+                        RemovedMappings.insert(Mapping);
+                    }
+                }
+                State->RequestedRemovals.clear();
+                auto Now = std::chrono::steady_clock::now();
+                while(ActiveMappings.size() > 0)
+                {
+                    auto& CurrentMapping = ActiveMappings.front();
+                    if(RemovedMappings.find(CurrentMapping.MappedPort) != RemovedMappings.end())
+                    {
+                        RemovedMappings.erase(CurrentMapping.MappedPort);
+                        MappedPorts.erase(CurrentMapping.MappedPort);
+                        Pop(ActiveMappings);
+                        continue;
+                    }
+                    double ElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(Now-CurrentMapping.LastMapped).count();
+                    if(ElapsedTime + LeaseMargin >= CurrentMapping.LeaseDuration)
+                    {
+                        IPService.AddTask(&MBUPNP::WANIPConnectionService::AddPortMapping,0,CurrentMapping.MappedPort,MBUPNP::Protocol::UDP,CurrentMapping.MappedPort,LocalIP,true,"MBChat2 - direct connection",LeaseDuration);
+                        CurrentMapping.LastMapped = Now;
+                        Heapify(ActiveMappings);
+                    }
+                    else
+                    {
+                        SleepDuration = CurrentMapping.LeaseDuration-(ElapsedTime+LeaseMargin);
+                        break;
+                    }
+                }
+                if(ActiveMappings.size() == 0)
+                {
+                    SleepDuration = 0;
+                }
+            }
+        }
+        catch(std::exception const& e)
+        {
+               
+        }
+        State->Stopping.store(true);
+    }
+    bool AsyncUDPMapper::AddPortMapping(uint16_t Port)
+    {
+        std::lock_guard Lock(m_State->InternalsMutex);
+        m_State->RequestedMappings.push_back(Port);
+        m_State->NewMappingConditional.notify_one();
+        return true;
+    }
+    bool AsyncUDPMapper::RemovePortMapping(uint16_t Port)
+    {
+        std::lock_guard Lock(m_State->InternalsMutex);
+        m_State->RequestedRemovals.push_back(Port);
+        m_State->NewMappingConditional.notify_one();
+        return true;
+    }
+    
+    //
+    
     //std::vector<PeerInfo> ConnectionManager::SharedState::FindDBPeers(ID const&,int k)
     //{
     //    std::vector<PeerInfo> ReturnValue;

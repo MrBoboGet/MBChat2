@@ -9,8 +9,10 @@ namespace MBChat2
 {
     class DBVisualiser : public MBCLI::Window
     {
-
+    protected:
+        ID m_DBID;
         std::shared_ptr<DBConnection> m_DBConnection;
+    private:
         std::shared_ptr<MBTUI::Stacker> m_Stacker;
         std::shared_ptr<MBTUI::REPL> m_InputField;
 
@@ -19,7 +21,15 @@ namespace MBChat2
     public:
         DBVisualiser();
         
-        virtual void SetDBConnection(std::shared_ptr<DBConnection> Connection);
+        virtual void SetDBID(ID DBID)
+        {
+            m_DBID = std::move(DBID);
+        }
+        virtual void SetDBConnection(std::shared_ptr<DBConnection> Connection)
+        {
+            m_DBConnection = std::move(Connection);
+        }
+        virtual void Init();
         virtual void ResourcePublished(NewMessage const& NewHeader);
 
         //

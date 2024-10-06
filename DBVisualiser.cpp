@@ -31,13 +31,8 @@ namespace MBChat2
                     BufferWindow->SetBuffer(std::move(Buffer));
                     BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
                     m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
-
                     m_DBConnection->UploadResource(std::move(NewResource));
                 });
-    }
-    void DBVisualiser::SetDBConnection(std::shared_ptr<DBConnection> Connection) 
-    {
-        m_DBConnection = std::move(Connection);
     }
     void DBVisualiser::ResourcePublished(NewMessage const& NewHeader) 
     {
@@ -50,6 +45,28 @@ namespace MBChat2
         BufferWindow->SetBuffer(std::move(Buffer));
         BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
         m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
+    }
+    void DBVisualiser::Init()
+    {
+        auto Stmt = m_DBConnection->GetDB()->
+            GetSQLStatement("SELECT * FROM Resources WHERE "
+                    "DatabaseHash=:DBHash ORDER BY RecievedTimestamp ASC");
+        Stmt.BindBlob("DBHash",m_DBID);
+        auto Rows = m_DBConnection->GetDB()->GetAllRows(Stmt);
+        for(auto&  Row :  Rows)
+        {
+            if(std::holds_alternative<std::monostate>(Row["Content"]))
+            {
+                continue;
+            }
+            std::shared_ptr<MBTUI::BufferWindow> BufferWindow = std::make_shared<MBTUI::BufferWindow>();
+            MBCLI::TerminalWindowBuffer Buffer(40,1);
+            std::string Content = std::get<std::string>(Row["Content"]);
+            Buffer.WriteCharacters(0,0,Content);
+            BufferWindow->SetBuffer(std::move(Buffer));
+            BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
+            m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
+        }
     }
     bool DBVisualiser::Updated() 
     {

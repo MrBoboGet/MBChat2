@@ -1,4 +1,5 @@
 #pragma once
+#include <condition_variable>
 #include <functional>
 #include "OverlayProtocol.h"
 #include <MBTCP/MBTCP.h>
@@ -279,6 +280,49 @@ namespace MBChat2
         void AddPeer(PeerInfo const& NewPeer);
     };
 
+    class AsyncUDPMapper
+    {
+        struct Mapping
+        {
+            uint16_t MappedPort = 0;   
+            std::chrono::time_point<std::chrono::steady_clock> LastMapped;
+            double LeaseDuration = 0;
+
+            bool operator<(Mapping const& Rhs) const
+            {
+                return LastMapped < Rhs.LastMapped;
+            }
+            bool operator>(Mapping const& Rhs) const
+            {
+                return LastMapped > Rhs.LastMapped;
+            }
+        };
+        struct SharedState
+        {
+            std::mutex InternalsMutex;
+            std::thread NotifyThread;
+            std::atomic<bool> Stopping;
+            std::condition_variable NewMappingConditional;
+            std::vector<uint16_t> RequestedMappings;
+            std::vector<uint16_t> RequestedRemovals;
+        };
+        std::shared_ptr<SharedState> m_State;
+
+        static void p_NotifyThread(std::shared_ptr<SharedState> State);
+    public:
+        AsyncUDPMapper(AsyncUDPMapper const&) = delete;
+        AsyncUDPMapper();
+        bool AddPortMapping(uint16_t Port);
+        bool RemovePortMapping(uint16_t Port);
+        ~AsyncUDPMapper()
+        {
+            m_State->Stopping.store(true);
+            std::lock_guard Lock(m_State->InternalsMutex);
+            m_State->NewMappingConditional.notify_one();
+            m_State->NotifyThread.join();
+        }
+    };
+
     class ConnectionManager
     {
         struct SharedState;
@@ -349,6 +393,7 @@ namespace MBChat2
 
             ResourceCallback ResourceRecievedCallback;
             RPCHandler RPCCallback;
+            AsyncUDPMapper PortMapper;
 
             std::vector<PeerInfo> GetClosestPeers(ID const&,int k);
             std::vector<PeerInfo> GetClosestPeers(ID const& TargetID,ID const& DatabaseID,int k);
@@ -363,6 +408,8 @@ namespace MBChat2
             bool ResourceInDB(Hash const& Resource);
             bool SubscribedToDB(Hash const& DBID);
             void AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions);
+
+            void AddSubscription(ID const& DatabaseID,PeerInfo const& PeerInfo);
             //
             void AddJoinDBTask(ID const& DBID); 
 
@@ -644,7 +691,7 @@ namespace MBChat2
 
         std::shared_ptr<SharedState> m_State;
     public:
-        ConnectionManager(IDParameters Params,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback);
+        ConnectionManager(IDParameters Params,uint16_t ListenPort,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback);
 
 
         //MBUtility::Future<std::shared_ptr<Connection>> 

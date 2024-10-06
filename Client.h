@@ -46,7 +46,6 @@ namespace MBChat2
 
         ID m_VisualisedDB;
         std::shared_ptr<ConnectionManager> m_ConnectionManager;
-        std::shared_ptr<MBDB::MrBoboDatabase> m_Database;
 
 
         class DBWindow : public MBCLI::Window

@@ -8,6 +8,8 @@
 
 #include <MBUtility/MBFiles.h>
 
+#include "Config.h"
+
 namespace MBChat2
 {
     //
@@ -244,13 +246,15 @@ namespace MBChat2
         auto& VisualisersInfo = m_ActiveVisualiser[DatabaseID];
         if(VisualisersInfo.Connection == nullptr)
         {
-            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_Database,DatabaseID);
+            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,DatabaseID);
         }
         m_VisualisedDB = DatabaseID;
         NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
         auto TermInfo = m_Terminal.GetTerminalInfo();
         m_TopLayerer.SetDimensions(MBCLI::Dimensions(TermInfo.Width,TermInfo.Height));
         NewVisualiser->SetDimensions(m_DBVisualiserWindow->GetDimensions());
+        NewVisualiser->SetDBID(DatabaseID);
+        NewVisualiser->Init();
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
         m_TopWindow.MoveRight();
     }
@@ -299,21 +303,7 @@ namespace MBChat2
         MBSockets::Init();
         int ReturnValue = 0;
 
-        ///std::string PortBuffer;
-        ///using MBParsing::operator&;
-        ///MBUtility::MBStringOutputStream OutStream(PortBuffer);
-        ///OutStream & uint16_t(1337);
-        ///MBUtility::MBBufferInputStream InStream(PortBuffer.data(), PortBuffer.size());
-        ///uint16_t Value;
-        ///InStream& Value;
-        ///std::cout << Value;
-        ///return 0;
 
-
-        //auto IP = MBSockets::StringToIP("192.168.0.123");
-        //std::cout<<MBSockets::IPToString(IP)<<std::endl;
-        //return 0;
-        
         std::filesystem::path ConfigPath = MBSystem::GetUserHomeDirectory()/".mbchat/";
         std::filesystem::path DBPath = MBSystem::GetUserHomeDirectory()/".mbchat/localdb.db";
         if(!std::filesystem::exists(DBPath))
@@ -337,6 +327,24 @@ namespace MBChat2
         {
             m_LocalDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(DBPath),MBDB::DBOpenOptions::ReadWrite);
         }
+        Config Config;
+        if(std::filesystem::exists(ConfigPath/"Config.json"))
+        {
+            try
+            {
+                MBError OutError = true;
+                auto ConfigJSON = MBParsing::ParseJSONObject(ConfigPath/"Config.json",&OutError);
+                Config.FillObject(ConfigJSON);
+                if(!OutError)
+                {
+                    p_DisplayError(OutError.ErrorMessage);   
+                }
+            }
+            catch(std::exception const& e)
+            {
+                p_DisplayError(e.what());
+            }
+        }
         auto IDPath = MBUnicode::PathToUTF8(ConfigPath/"id");
         if(!std::filesystem::exists(IDPath))
         {
@@ -348,6 +356,7 @@ namespace MBChat2
         IDParameters Params;
         Params.LocalID = m_LocalID;
         m_ConnectionManager = std::make_shared<ConnectionManager>(Params,
+                Config.Port.Value(),
                 MBUnicode::PathToUTF8(DBPath),
                 [&](NewMessage const& Resource ){p_ResourceRecievedHandler(Resource);},
                 [&](PeerInfo const&  Peer,MBParsing::JSONObject const& Object, MBUtility::Promise<MBParsing::JSONObject> Obj )
