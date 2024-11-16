@@ -27,6 +27,10 @@ namespace MBChat2
         }
         virtual void UploadResource(ResourceContent NewResource);
         virtual ID LatestID();
+        ID GetDBID()
+        {
+            return m_DatabaseID;   
+        }
         virtual std::shared_ptr<MBDB::MrBoboDatabase> GetDB();
     };
 }

@@ -149,6 +149,8 @@ namespace MBChat2
     {
         Hash DatabaseID;
         uint64_t Timestamp = 0;
+        std::string Type;
+
         std::vector<Hash> ForkedDatabase;
         std::vector<Hash> Participants;
 
@@ -157,6 +159,7 @@ namespace MBChat2
             std::string OutString;
             MBUtility::MBStringOutputStream OutStream(OutString);
             OutStream & Timestamp;
+            OutStream & Type;
             OutStream & ForkedDatabase;
             OutStream & Participants;
             auto Hash = MBCrypto::HashData(OutString,MBCrypto::HashFunction::SHA256);

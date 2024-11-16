@@ -1,15 +1,13 @@
 #include "Client.h"
-
 #include <MBTUI/BufferWindow.h>
-
-#include "DBVisualiser.h"
-
 #include <MBSystem/MBSystem.h>
-
 #include <MBUtility/MBFiles.h>
-
 #include "Config.h"
 
+#include "DBVisualiser.h"
+#include "Visualisers/ChatVisualiser.h"
+
+#include "LispModule.h"
 namespace MBChat2
 {
     //
@@ -112,6 +110,17 @@ namespace MBChat2
     void Client::p_SetNewVisualiserWindow(std::shared_ptr<DBVisualiser> Visualiser)
     {
     }
+
+    void Client::AddVisualiser(std::string const& DatabaseType,
+            VisualiserFactory VisualiserCreator)
+    {
+        m_RegisteredVisualisers[DatabaseType] = std::move(VisualiserCreator);
+    }
+    std::shared_ptr<Client> Client::MakeClient()
+    {
+        return std::shared_ptr<Client>(new Client());
+    }
+
     std::vector<std::string> Client::p_TokenizeCommand(std::string const& NewCommand)
     {
         std::vector<std::string> ReturnValue;
@@ -193,6 +202,7 @@ namespace MBChat2
         DatabaseDefinition ReturnValue;
         ReturnValue.Participants.push_back(LocalID);
         ReturnValue.Participants.push_back(PeerID);
+        ReturnValue.Type = "Chat";
         std::sort(ReturnValue.Participants.begin(),ReturnValue.Participants.end());
         ReturnValue.CalculateHash();
         return ReturnValue;
@@ -217,7 +227,7 @@ namespace MBChat2
                         {
                             m_ConnectionManager->CreateDB(NewDB);
                         }
-                        p_AddVisualiser(NewDB.DatabaseID.Content);
+                        p_AddVisualiser(NewDB);
                     }
                     catch(std::exception const& e)
                     {
@@ -229,18 +239,27 @@ namespace MBChat2
     {
            
     }
-    void Client::p_AddVisualiser(ID const& DatabaseID)
+    void Client::p_AddVisualiser(DatabaseDefinition const& Database)
     {
-        std::unique_ptr<DBVisualiser> NewVisualiser = std::make_unique<DBVisualiser>();
-        auto& VisualisersInfo = m_ActiveVisualiser[DatabaseID];
+        std::unique_ptr<DBVisualiser> NewVisualiser = std::make_unique<ChatVisualiser>();
+        
+        if(Database.Type != "")
+        {
+            auto FactoryIt = m_RegisteredVisualisers.find(Database.Type);
+            if(FactoryIt != m_RegisteredVisualisers.end())
+            {
+                NewVisualiser = FactoryIt->second();
+            }
+        }
+
+        auto& VisualisersInfo = m_ActiveVisualiser[Database.DatabaseID.Content];
         if(VisualisersInfo.Connection == nullptr)
         {
-            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,DatabaseID);
+            VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,Database.DatabaseID.Content);
         }
-        m_VisualisedDB = DatabaseID;
+        m_VisualisedDB = Database.DatabaseID.Content;
         NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
         auto TermInfo = m_Terminal.GetTerminalInfo();
-        NewVisualiser->SetDBID(DatabaseID);
         NewVisualiser->Init();
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
         m_TopWindow.MoveRight();
@@ -274,7 +293,7 @@ namespace MBChat2
                             m_ConnectionManager->CreateDB(NewDB);
                             m_ConnectionManager->AddDBPeer(Peers,NewDB.DatabaseID.Content);
                             m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
-                            p_AddVisualiser(NewDB.DatabaseID.Content);
+                            p_AddVisualiser(NewDB);
                         }
                         catch(...)
                         {
@@ -291,8 +310,27 @@ namespace MBChat2
         int ReturnValue = 0;
 
 
+        m_Evaluator = MBLisp::Evaluator::CreateEvaluator();
+        m_Evaluator->AddInternalModule("mbchat",
+                std::make_unique<ChatLispModule>(shared_from_this()));
+        m_Evaluator->LoadStd();
+
+
+
+
         std::filesystem::path ConfigPath = MBSystem::GetUserHomeDirectory()/".mbchat/";
         std::filesystem::path DBPath = MBSystem::GetUserHomeDirectory()/".mbchat/localdb.db";
+        std::filesystem::path PluginPath = ConfigPath/"plugins";
+
+        auto PluginIterator = std::filesystem::directory_iterator(PluginPath);
+        for(auto const& Entry : PluginIterator)
+        {
+            if(Entry.is_regular_file())
+            {
+                m_Evaluator->Eval(Entry.path());
+            }
+        }
+
         if(!std::filesystem::exists(DBPath))
         {
             std::filesystem::create_directories(DBPath.parent_path());
@@ -368,6 +406,10 @@ namespace MBChat2
             NewPeer.ListeningPort = std::get<MBDB::IntType>(Peer["Port"]);
         }
         m_ConnectionManager->AddConnections(Peers);
+
+
+
+
 
         m_Terminal.SetExitHandler([]{ std::exit(0);});
         m_Terminal.InitializeWindowMode();

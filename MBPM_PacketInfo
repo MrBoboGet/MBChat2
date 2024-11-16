@@ -3,5 +3,5 @@
     "PacketType":"C++",
 	"Attributes":[],
     "SubPackets":[],
-    "Dependancies":["MBUtility","MBUPNP","MrBoboDatabase","MBCLI","MBTUI","MrBoboSockets","MBParsing","MBTCP"]
+    "Dependancies":["MBUtility","MBUPNP","MrBoboDatabase","MBCLI","MBTUI","MrBoboSockets","MBParsing","MBTCP","MBLisp"]
 }

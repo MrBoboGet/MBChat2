@@ -341,8 +341,9 @@ namespace MBChat2
     }
     void ConnectionManager::CreateDB(DatabaseDefinition const& Definition)
     {
-        auto CreateDBStatement = m_State->DB.GetSQLStatement("INSERT INTO Databases(Hash,Time) VALUES (:Hash,:Timestamp);");
+        auto CreateDBStatement = m_State->DB.GetSQLStatement("INSERT INTO Databases(Hash,Type,Time) VALUES (:Hash,:Type,:Timestamp);");
         CreateDBStatement.BindValue("Hash",Definition.DatabaseID.Content);
+        CreateDBStatement.BindValue("Type",Definition.Type);
         CreateDBStatement.BindValue("Timestamp",Definition.Timestamp);
         m_State->DB.GetAllRows(CreateDBStatement);
 

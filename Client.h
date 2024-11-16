@@ -6,13 +6,15 @@
 #include "DBVisualiser.h"
 #include "Connection.h"
 
+#include <MBLisp/Evaluator.h>
+
 
 namespace MBChat2
 {
 
+    typedef MBUtility::MOFunction<std::unique_ptr<DBVisualiser>()> VisualiserFactory;
 
-
-    class Client
+    class Client : public std::enable_shared_from_this<Client>
     {
         std::mutex m_InternalsMutex;
         MBCLI::WindowManager m_TopWindow;
@@ -21,6 +23,7 @@ namespace MBChat2
         MBCLI::MBTerminal m_Terminal;
         bool m_LayerHandleInput = false;
 
+        std::shared_ptr<MBLisp::Evaluator> m_Evaluator;
 
         MBTUI::REPL m_CommandRepl;
 
@@ -41,6 +44,7 @@ namespace MBChat2
 
         
         std::unordered_map<ID,DBVisualiserInfo> m_ActiveVisualiser;
+        std::unordered_map<std::string,VisualiserFactory> m_RegisteredVisualisers;
 
         ID m_LocalID;
 
@@ -76,7 +80,7 @@ namespace MBChat2
         void p_StartChat(ID const& PeerID);
         void p_DisplayError(std::string const& ErrorMessage);
 
-        void p_AddVisualiser(ID const& DatabaseID);
+        void p_AddVisualiser(DatabaseDefinition const& Database);
 
 
         void p_ResourceRecievedHandler(NewMessage const& Header);
@@ -85,8 +89,13 @@ namespace MBChat2
         void p_HandleCommandString(std::string const& NewCommand);
         void p_HandleEvent(MBCLI::TTYEvent const& NewInput);
         void p_SetNewVisualiserWindow(std::shared_ptr<DBVisualiser> Visualiser);
-    public:
+
+
         Client(){};
+    public:
+        void AddVisualiser(std::string const& DatabaseType,
+                VisualiserFactory Factory);
+        std::shared_ptr<Client> MakeClient();
         Client(Client&&) = delete;
         Client& operator=(Client&&) = delete;
         Client& operator=(Client const&) = delete;
