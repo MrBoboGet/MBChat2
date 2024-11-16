@@ -991,7 +991,7 @@ namespace MBChat2
             std::vector<Mapping> ActiveMappings;
             std::unordered_set<uint16_t> RemovedMappings;
             std::unordered_set<uint16_t> MappedPorts;
-            double SleepDuration = 0;
+            double SleepDuration = 10;
             double LeaseDuration = 120;
             double LeaseMargin = 10;
 
@@ -1010,9 +1010,11 @@ namespace MBChat2
             while(!State->Stopping.load())
             {
                 std::unique_lock Lock(State->InternalsMutex);
-                while(!State->Stopping.load() && (State->RequestedMappings.size() == 0 && State->RequestedMappings.size() == 0))
+                State->NewMappingConditional.wait_for(Lock,std::chrono::milliseconds(
+                            int(SleepDuration*1000)));
+                if(State->Stopping.load())
                 {
-                    State->NewMappingConditional.wait(Lock);
+                    break;
                 }
                 for(auto NewMapping : State->RequestedMappings)
                 {

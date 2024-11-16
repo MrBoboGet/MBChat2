@@ -63,10 +63,9 @@ namespace MBChat2
             
             virtual bool Updated();
             virtual void HandleInput(MBCLI::ConsoleInput const& Input);
-            virtual void SetDimensions(MBCLI::Dimensions NewDimensions);
             virtual void SetFocus(bool IsFocused);
             virtual MBCLI::CursorInfo GetCursorInfo();
-            virtual MBCLI::TerminalWindowBuffer GetBuffer();
+            virtual void WriteBuffer(MBCLI::BufferView View,bool Redraw);
         };
 
         std::shared_ptr<DBWindow> m_DBVisualiserWindow;

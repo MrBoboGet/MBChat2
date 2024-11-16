@@ -29,7 +29,7 @@ namespace MBChat2
                     MBCLI::TerminalWindowBuffer Buffer(40,1);
                     Buffer.WriteCharacters(0,0,Line);
                     BufferWindow->SetBuffer(std::move(Buffer));
-                    BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
+                    //BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
                     m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
                     m_DBConnection->UploadResource(std::move(NewResource));
                 });
@@ -43,7 +43,6 @@ namespace MBChat2
             Buffer.WriteCharacters(0,0,NewHeader.Content);
         }
         BufferWindow->SetBuffer(std::move(Buffer));
-        BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
         m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
     }
     void DBVisualiser::Init()
@@ -64,7 +63,6 @@ namespace MBChat2
             std::string Content = std::get<std::string>(Row["Content"]);
             Buffer.WriteCharacters(0,0,Content);
             BufferWindow->SetBuffer(std::move(Buffer));
-            BufferWindow->SetDimensions(MBCLI::Dimensions(40,1));
             m_Stacker->AddElement(MBUtility::SmartPtr<MBCLI::Window>(std::static_pointer_cast<MBCLI::Window>(BufferWindow)));
         }
     }
@@ -76,10 +74,6 @@ namespace MBChat2
     {
         m_TopWindowManager.HandleInput(Input);
     }
-    void DBVisualiser::SetDimensions(MBCLI::Dimensions NewDimensions) 
-    {
-        m_TopWindowManager.SetDimensions(NewDimensions);
-    }
     void DBVisualiser::SetFocus(bool IsFocused) 
     {
         m_TopWindowManager.SetFocus(IsFocused);
@@ -88,8 +82,8 @@ namespace MBChat2
     {
         return m_TopWindowManager.GetCursorInfo();
     }
-    MBCLI::TerminalWindowBuffer DBVisualiser::GetBuffer() 
+    void DBVisualiser::WriteBuffer(MBCLI::BufferView View,bool Redraw)
     {
-        return m_TopWindowManager.GetBuffer();
+        return m_TopWindowManager.WriteBuffer(View.SubView(0,0),Redraw);
     }
 }

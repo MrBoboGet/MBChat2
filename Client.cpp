@@ -44,16 +44,6 @@ namespace MBChat2
         }
         ActiveWindow->HandleInput(Input);
     }
-    void Client::DBWindow::SetDimensions(MBCLI::Dimensions NewDimensions)
-    {
-        auto ActiveWindow = p_GetActiveWindow();
-        m_Dims = NewDimensions;
-        if(ActiveWindow == nullptr)
-        {
-            return;   
-        }
-        ActiveWindow->SetDimensions(NewDimensions);
-    }
     MBCLI::Dimensions Client::DBWindow::GetDimensions()
     {
         return m_Dims;
@@ -76,14 +66,14 @@ namespace MBChat2
         }
         return ActiveWindow->GetCursorInfo();
     }
-    MBCLI::TerminalWindowBuffer Client::DBWindow::GetBuffer() 
+    void Client::DBWindow::WriteBuffer(MBCLI::BufferView View,bool Redraw)
     {
         auto ActiveWindow = p_GetActiveWindow();
         if(ActiveWindow == nullptr)
         {
-            return MBCLI::TerminalWindowBuffer();   
+            return;
         }
-        return ActiveWindow->GetBuffer();
+        ActiveWindow->WriteBuffer(View.SubView(0,0),Redraw);
     }
     //
 
@@ -95,7 +85,6 @@ namespace MBChat2
         {
             m_Terminal.Clear();
             auto const& ResizeEvent = NewInput.GetType<MBCLI::ResizeEvent>();
-            m_TopLayerer.SetDimensions( MBCLI::Dimensions(ResizeEvent.NewWidth,ResizeEvent.NewHeight));
         }
         else if(NewInput.IsType<MBCLI::ConsoleInput>())
         {
@@ -251,8 +240,6 @@ namespace MBChat2
         m_VisualisedDB = DatabaseID;
         NewVisualiser->SetDBConnection(VisualisersInfo.Connection);
         auto TermInfo = m_Terminal.GetTerminalInfo();
-        m_TopLayerer.SetDimensions(MBCLI::Dimensions(TermInfo.Width,TermInfo.Height));
-        NewVisualiser->SetDimensions(m_DBVisualiserWindow->GetDimensions());
         NewVisualiser->SetDBID(DatabaseID);
         NewVisualiser->Init();
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
@@ -411,12 +398,9 @@ namespace MBChat2
         
         //m_TopWindow = MBCLI::WindowManager(std::move(Windows) , Dims,false,1);
         m_TopLayerer.AddLayer(MBUtility::SmartPtr((MBCLI::Window*)&m_TopWindow));
-        m_TopLayerer.SetDimensions(Dims);
         bool ShouldRun = true;
         //m_Terminal.PrintWindowBuffer(m_TopWindow.GetBuffer(),0,0);
-        m_Terminal.PrintWindowBuffer(m_TopLayerer.GetBuffer(),0,0);
-        m_Terminal.HideCursor();
-        m_Terminal.Refresh();
+        m_Terminal.WriteWindow(m_TopLayerer);
         while(ShouldRun)
         {
             auto NewInput = m_Terminal.GetNextEvent();
@@ -430,13 +414,7 @@ namespace MBChat2
                 m_RecievedEvents.clear();
             }
             p_HandleEvent(NewInput);
-
-            auto NewBuffer = m_TopLayerer.GetBuffer();
-            ///SideWindow.SetDimensions(MBCLI::Dimensions(30,25));
-            //auto NewBuffer = SideWindow.GetBuffer();
-            m_Terminal.PrintWindowBuffer(NewBuffer,0,0);
-            m_Terminal.SetCursorInfo(m_TopLayerer.GetCursorInfo());
-            m_Terminal.Refresh();
+            m_Terminal.WriteWindow(m_TopLayerer);
         }
         return ReturnValue;
     }
