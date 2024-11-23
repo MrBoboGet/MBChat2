@@ -255,6 +255,9 @@ namespace MBChat2
         auto& VisualisersInfo = m_ActiveVisualiser[Database.DatabaseID.Content];
         if(VisualisersInfo.Connection == nullptr)
         {
+            std::shared_ptr<MBDB::MrBoboDatabase> NewDB = std::make_shared<MBDB::MrBoboDatabase>(":memory",MBDB::DBOpenOptions::ReadOnly);
+            NewDB->Exec("ATTACH '"+MBUnicode::PathToUTF8(m_DBPath)+"' AS Parent");
+            NewDB->Exec("CREATE VIew Resources AS SELECT * FROM Parent.Resources");
             VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,Database.DatabaseID.Content);
         }
         m_VisualisedDB = Database.DatabaseID.Content;
@@ -322,14 +325,6 @@ namespace MBChat2
         std::filesystem::path DBPath = MBSystem::GetUserHomeDirectory()/".mbchat/localdb.db";
         std::filesystem::path PluginPath = ConfigPath/"plugins";
 
-        auto PluginIterator = std::filesystem::directory_iterator(PluginPath);
-        for(auto const& Entry : PluginIterator)
-        {
-            if(Entry.is_regular_file())
-            {
-                m_Evaluator->Eval(Entry.path());
-            }
-        }
 
         if(!std::filesystem::exists(DBPath))
         {
@@ -352,6 +347,7 @@ namespace MBChat2
         {
             m_LocalDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(DBPath),MBDB::DBOpenOptions::ReadWrite);
         }
+        m_DBPath = DBPath;
         Config Config;
         if(std::filesystem::exists(ConfigPath/"Config.json"))
         {
@@ -409,6 +405,33 @@ namespace MBChat2
 
 
 
+        if(std::filesystem::exists(PluginPath))
+        {
+            auto PluginIterator = std::filesystem::directory_iterator(PluginPath);
+            try
+            {
+                for(auto const& Entry : PluginIterator)
+                {
+                    if(Entry.is_regular_file() && Entry.path().extension() == ".lisp")
+                    {
+                        m_Evaluator->Eval(Entry.path());
+                    }
+                }
+            }
+            catch(MBLisp::LookupError const& e)
+            {
+                std::cout<<e.what()<<": "<<m_Evaluator->GetSymbolString(e.GetSymbol())<<std::endl;
+            }
+            catch (MBLisp::UncaughtSignal& e)
+            {
+                std::cout<<"Uncaught signal:";
+                m_Evaluator->Eval(e.AssociatedScope, e.AssociatedScope->FindVariable(m_Evaluator->GetSymbolID("print")), {e.ThrownValue});
+            }
+            catch(std::exception const& e)
+            {
+                std::cout<<e.what()<<std::endl;
+            }
+        }
 
 
         m_Terminal.SetExitHandler([]{ std::exit(0);});
@@ -443,6 +466,10 @@ namespace MBChat2
         bool ShouldRun = true;
         //m_Terminal.PrintWindowBuffer(m_TopWindow.GetBuffer(),0,0);
         m_Terminal.WriteWindow(m_TopLayerer);
+
+
+
+
         while(ShouldRun)
         {
             auto NewInput = m_Terminal.GetNextEvent();

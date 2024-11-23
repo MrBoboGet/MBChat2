@@ -34,6 +34,7 @@ namespace MBChat2
 
         //MBCL
         std::shared_ptr<MBDB::MrBoboDatabase> m_LocalDB;
+        std::filesystem::path m_DBPath;
 
         std::vector<MBUtility::MOFunction<void()>> m_RecievedEvents;
         struct DBVisualiserInfo
@@ -95,7 +96,7 @@ namespace MBChat2
     public:
         void AddVisualiser(std::string const& DatabaseType,
                 VisualiserFactory Factory);
-        std::shared_ptr<Client> MakeClient();
+        static std::shared_ptr<Client> MakeClient();
         Client(Client&&) = delete;
         Client& operator=(Client&&) = delete;
         Client& operator=(Client const&) = delete;

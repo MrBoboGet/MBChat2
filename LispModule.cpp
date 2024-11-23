@@ -10,8 +10,10 @@ namespace MBChat2
     }
     void LispVisualiser::Init() 
     {
+        auto Ref = MBLisp::FromShared(GetConnectionPtr());
+        auto Value = MBLisp::Value(Ref);
         auto Result = m_Evaluator->Eval(
-                m_ChatScope,m_Evaluator->GetValue(*m_ChatScope,"init") ,{m_Value});
+                m_ChatScope,m_Evaluator->GetValue(*m_ChatScope,"init") ,{m_Value,Value});
     }
     void LispVisualiser::ResourcePublished(NewMessage const& NewHeader) 
     {
@@ -32,7 +34,7 @@ namespace MBChat2
         Connection.UploadResource(std::move(NewContent));
     }
 
-    static void Init_LispVisuliser(LispVisualiser& Visualiser)
+    static void Init_LispVisuliser(LispVisualiser& Visualiser,DBConnection& Connection)
     {
         Visualiser.Init();
     }
@@ -66,6 +68,15 @@ namespace MBChat2
                 });
     }
 
+    static MBDB::SQLStatement Statement_Connection(DBConnection& Connection,MBLisp::String const& SQL)
+    {
+        return Connection.GetDB()->GetSQLStatement(SQL);
+    }
+    static MBLisp::Value Connection_DB(DBConnection& Connection)
+    {
+        return MBLisp::FromShared(Connection.GetDB());
+    }
+
     MBLisp::Ref<MBLisp::Scope> ChatLispModule::GetModuleScope(MBLisp::Evaluator& AssociatedEvaluator) 
     {
         auto ReturnValue = MBLisp::MakeRef<MBLisp::Scope>();
@@ -80,6 +91,9 @@ namespace MBChat2
         AssociatedEvaluator.AddObjectMethod<&LispVisualiser::GetConnectionRef>(ReturnValue,"connection");
         AssociatedEvaluator.AddGeneric<UploadString>(ReturnValue,"upload-resource");
         AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
+
+        AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
+        AssociatedEvaluator.AddGeneric<Connection_DB>(ReturnValue,"db");
 
         return ReturnValue;
     }

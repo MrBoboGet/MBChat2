@@ -23,7 +23,10 @@ namespace MBChat2
     {
         std::shared_ptr<Client> m_AssociatedClient;
     public:
-        ChatLispModule(std::shared_ptr<Client> AssociatedClient);
+        ChatLispModule(std::shared_ptr<Client> AssociatedClient)
+        {
+            m_AssociatedClient = AssociatedClient;   
+        }
         virtual MBLisp::Ref<MBLisp::Scope> GetModuleScope(MBLisp::Evaluator& AssociatedEvaluator) override;
     };
 }
