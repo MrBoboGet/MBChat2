@@ -61,7 +61,7 @@ namespace MBChat2
         }
         catch(...)
         {
-            
+            int hej = 2;
         }
         State->Stopping.store(true);
         State->Transport->Abort();

@@ -7,7 +7,7 @@
 #include <MBTUI/MBTUI.h>
 namespace MBChat2
 {
-    class DBVisualiser : public virtual MBCLI::Window
+    class DBVisualiser : public MBCLI::Window
     {
     private:
         std::shared_ptr<DBConnection> m_DBConnection;

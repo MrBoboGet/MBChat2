@@ -605,18 +605,32 @@ namespace MBChat2
             FindClosestPeers(FindPeerRequest PeerRequest,PeersFoundCallback PeersFound)
                 : m_MinHeapSorter(PeerRequest.PeerID.Content,false),m_IDSorter(PeerRequest.PeerID.Content)
             {
+                if(PeersFound.IsEmpty())
+                {
+                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
+                }
                 m_Callback = std::move(PeersFound);
                 m_PeerRequest = std::move(PeerRequest);
             }
             FindClosestPeers(FindPeerRequest PeerRequest,ID const& DBID,PeersFoundCallback PeersFound)
                 : m_MinHeapSorter(PeerRequest.PeerID.Content,false),m_IDSorter(PeerRequest.PeerID.Content)
             {
+                if(PeersFound.IsEmpty())
+                {
+                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
+                }
                 PeerRequest.PeerID.Content = DBID;
                 m_PeerRequest = std::move(PeerRequest);
+                m_Callback = std::move(PeersFound);
             }
             FindClosestPeers(ID const& TargetID,PeersFoundCallback PeersFound)
                 : m_MinHeapSorter(TargetID,false),m_IDSorter(TargetID)
             {
+                if(PeersFound.IsEmpty())
+                {
+                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
+                }
+                m_Callback = std::move(PeersFound);
                 m_PeerRequest.PeerID.Content = TargetID;
             }
             void Init()

@@ -4,7 +4,7 @@
 namespace MBChat2
 {
     LispVisualiser::LispVisualiser(std::shared_ptr<MBLisp::Evaluator> Evaluator,MBLisp::Value Val)
-        : MBLisp::LispWindow(Evaluator,Val)
+        : m_UnderylingWindow(Evaluator,Val)
     {
         m_ChatScope = Evaluator->GetModuleScope("mbchat");
     }
@@ -12,15 +12,43 @@ namespace MBChat2
     {
         auto Ref = MBLisp::FromShared(GetConnectionPtr());
         auto Value = MBLisp::Value(Ref);
-        auto Result = m_Evaluator->Eval(
-                m_ChatScope,m_Evaluator->GetValue(*m_ChatScope,"init") ,{m_Value,Value});
+        auto& Evaluator = m_UnderylingWindow.GetEvaluator();
+        auto Result = Evaluator.Eval(
+                m_ChatScope,Evaluator.GetValue(*m_ChatScope,"init") ,{m_UnderylingWindow.GetUnderylingValue(),Value});
     }
     void LispVisualiser::ResourcePublished(NewMessage const& NewHeader) 
     {
-        auto Result = m_Evaluator->Eval(
-                m_ChatScope,m_Evaluator->GetValue(*m_ChatScope,"resource-published") ,
-                {m_Value,MBLisp::Value::EmplaceExternal<NewMessage>(NewHeader)});
+        auto& Evaluator = m_UnderylingWindow.GetEvaluator();
+        auto Result = Evaluator.Eval(
+                m_ChatScope,Evaluator.GetValue(*m_ChatScope,"resource-published") ,
+                {m_UnderylingWindow.GetUnderylingValue(),MBLisp::Value::EmplaceExternal<NewMessage>(NewHeader)});
     }
+    bool LispVisualiser::Updated() 
+    {
+        return m_UnderylingWindow.Updated();
+    }
+    void LispVisualiser::HandleInput(MBCLI::ConsoleInput const& Input)
+    {
+        m_UnderylingWindow.HandleInput(Input);
+    }
+    MBCLI::Dimensions LispVisualiser::PreferedDimensions(MBCLI::Dimensions SuggestedDimensions) 
+    {
+        return m_UnderylingWindow.PreferedDimensions(SuggestedDimensions);
+    }
+    void LispVisualiser::SetFocus(bool IsFocused) 
+    {
+        m_UnderylingWindow.SetFocus(IsFocused);
+    }
+    MBCLI::CursorInfo LispVisualiser::GetCursorInfo() 
+    {
+        return m_UnderylingWindow.GetCursorInfo();
+    }
+    void LispVisualiser::WriteBuffer(MBCLI::BufferView View,bool Redraw) 
+    {
+        m_UnderylingWindow.WriteBuffer(std::move(View),Redraw);
+    }
+
+
     MBLisp::Ref<DBConnection> LispVisualiser::GetConnectionRef()
     {
         return MBLisp::FromShared(GetConnectionPtr());
