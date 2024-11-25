@@ -122,6 +122,7 @@ namespace MBChat2
 
         AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
         AssociatedEvaluator.AddGeneric<Connection_DB>(ReturnValue,"db");
+        AssociatedEvaluator.AddGeneric<Index_NewMessage>("index");
 
         return ReturnValue;
     }
