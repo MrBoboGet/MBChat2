@@ -8,6 +8,13 @@
 namespace MBChat2
 {
 
+    struct ResourceHandle
+    {
+        ID Id;
+        std::string Path;
+    };
+
+
     class LispVisualiser : public DBVisualiser
     {
         MBLisp::Ref<MBLisp::Scope> m_ChatScope;
@@ -18,12 +25,13 @@ namespace MBChat2
         virtual void ResourcePublished(NewMessage const& NewHeader) override;
 
 
-        virtual bool Updated() override;
-        virtual void HandleInput(MBCLI::ConsoleInput const& Input) override;
+        virtual bool HandleInput(MBCLI::ConsoleInput const& Input) override;
         virtual MBCLI::Dimensions PreferedDimensions(MBCLI::Dimensions SuggestedDimensions) override;
         virtual void SetFocus(bool IsFocused) override;
         virtual MBCLI::CursorInfo GetCursorInfo() override;
         virtual void WriteBuffer(MBCLI::BufferView View,bool Redraw) override;
+
+
         
         MBLisp::Ref<DBConnection> GetConnectionRef();
     };

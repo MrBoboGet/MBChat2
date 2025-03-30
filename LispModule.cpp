@@ -23,13 +23,9 @@ namespace MBChat2
                 m_ChatScope,Evaluator.GetValue(*m_ChatScope,"resource-published") ,
                 {m_UnderylingWindow.GetUnderylingValue(),MBLisp::Value::EmplaceExternal<NewMessage>(NewHeader)});
     }
-    bool LispVisualiser::Updated() 
+    bool LispVisualiser::HandleInput(MBCLI::ConsoleInput const& Input)
     {
-        return m_UnderylingWindow.Updated();
-    }
-    void LispVisualiser::HandleInput(MBCLI::ConsoleInput const& Input)
-    {
-        m_UnderylingWindow.HandleInput(Input);
+        return m_UnderylingWindow.HandleInput(Input);
     }
     MBCLI::Dimensions LispVisualiser::PreferedDimensions(MBCLI::Dimensions SuggestedDimensions) 
     {
@@ -70,6 +66,380 @@ namespace MBChat2
     {
         Visualiser.ResourcePublished(Resource);
     }
+
+
+    MBLisp::String GetContent(DBConnection& Connection,ResourceHandle const& Resource)
+    {
+        MBLisp::String ReturnValue;
+
+        auto DB = Connection.GetDB();
+        auto Stmt = DB->GetSQLStatement("SELECT StoredLocaly,StoredInline,Content FROM Resources WHERE Hash = :Hash");
+        Stmt.BindBlob("Hash",Resource.Id);
+        
+        auto Rows = DB->GetAllRows(Stmt);
+        if(Rows.size() == 0)
+        {
+            throw std::runtime_error("Cannot get content: invalid resource id");
+        }
+        if(Rows.size() > 1)
+        {
+            throw std::runtime_error("Error getting content: invariant broken, more than one row in db");
+        }
+		auto const& Row = Rows[0];
+        if(std::get<MBDB::IntType>(Row["StoredLocaly"]) == 0)
+        {
+            throw std::runtime_error("Error getting content: invariant broken, more than one row in db");
+        }
+        if(std::get<MBDB::IntType>(Row["StoredInline"]) == 0)
+        {
+            throw std::runtime_error("Getting content from file not supported yet");
+        }
+        ReturnValue = std::get<std::string>(Row["Content"]);
+        return ReturnValue;
+    }
+    MBLisp::String GetPath(DBConnection& Connection,ResourceHandle const& Resource)
+    {
+        return Resource.Path;
+    }
+
+    struct QueryPart
+    {
+        bool RecursiveAll = false;
+        bool Wildcard = false;
+        std::string Name;
+        std::regex RegexPattern;
+    };
+
+    std::vector<QueryPart> i_ParseQueryParts(MBLisp::String const& Query)
+    {
+        std::vector<QueryPart> ReturnValue;
+        size_t ParseOffset = 0;
+        bool HasRecursive = false;
+        while(ParseOffset < Query.size())
+        {
+            auto NextDelim = Query.find('/');
+            size_t NextNonWhitespace = ParseOffset; 
+            MBParsing::SkipWhitespace(Query,ParseOffset,&NextNonWhitespace);
+            if(NextNonWhitespace ==  NextDelim)
+            {
+                ParseOffset = NextNonWhitespace +1;
+                continue;
+            }
+            auto& NewPart = ReturnValue.emplace_back();
+            NewPart.Name = Query.substr(NextNonWhitespace,NextDelim-NextNonWhitespace);
+            NewPart.RecursiveAll = NewPart.Name == "**";
+            NewPart.Wildcard = NewPart.Name.find_first_of("*?") != NewPart.Name.npos && !NewPart.RecursiveAll;
+            if(NewPart.Wildcard)
+            {
+                std::string RegexString;
+                size_t RegexParseOffset = 0;
+                auto InsertEscaped = [](std::string& OutString,std::string const& Content,size_t Offset,size_t End)
+                {
+                    for(size_t i = Offset; i < End;i++)
+                    {
+                        auto SpecialChars = {'f','n','r','t','v','x','u','c'};
+                        auto CurrentChar = Content[i];
+                        if(std::find(SpecialChars.begin(),SpecialChars.end(),Content[i]) != SpecialChars.end())
+                        {
+                            OutString += CurrentChar;
+                        }
+                        else
+                        {
+                            OutString += '\\';
+                            OutString += CurrentChar;
+                        }
+                    }
+                };
+                while(RegexParseOffset < NewPart.Name.size())
+                {
+                    auto NextSpecial = NewPart.Name.find_first_of("*?");
+                    if(NextSpecial == std::string::npos)
+                    {
+                        InsertEscaped(RegexString,NewPart.Name,RegexParseOffset,NewPart.Name.size());
+                        break;
+                    }
+                    InsertEscaped(RegexString,NewPart.Name,RegexParseOffset,NextSpecial);
+                    if(NewPart.Name[NextSpecial] == '*')
+                    {
+                        RegexString += ".*";
+                    }
+                    else if(NewPart.Name[NextSpecial] == '?')
+                    {
+                        RegexString += ".";
+                    }
+                    RegexParseOffset = NextSpecial+1;
+                }
+                NewPart.RegexPattern = std::regex(RegexString);
+            }
+
+            ParseOffset = NextDelim+1;
+            if(NewPart.RecursiveAll)
+            {
+                if(HasRecursive)
+                {
+                    throw std::runtime_error("Query path can only contain one recursive wildcard");
+                }
+                HasRecursive = true;
+            }
+        }
+        if(ReturnValue.size() == 0)
+        {
+            throw std::runtime_error("Invalid query: path query cannot be empty");
+        }
+        if(ReturnValue.back().RecursiveAll)
+        {
+            throw std::runtime_error("Invalid query: recursive query cannot be last part");
+        }
+        return ReturnValue;
+    }
+    void GetResource_ImplPrepared(MBDB::MrBoboDatabase& DB,
+                            MBLisp::List& OutResult ,
+                            MBDB::SQLStatement& ExplicitName,
+                            MBDB::SQLStatement& AllParent,
+                            std::vector<QueryPart> const& Parts,
+                            MBDB::IntType ParentInt,
+                            std::string& CurrentPath,
+                            size_t Offset, 
+                            size_t RecursiveIndex = -1)
+    {
+        auto const& CurrentPart = Parts[Offset];
+        if(CurrentPart.RecursiveAll)
+        {
+            RecursiveIndex = Offset+1;
+        }
+        else if(CurrentPart.Wildcard)
+        {
+            AllParent.Reset();
+            AllParent.BindValue("ParentHash",ParentInt);
+            auto Rows = DB.GetAllRows(AllParent);
+            for(auto const& Row : Rows)
+            {
+                ID NewHash;
+                NewHash = MBChat2::StringToID(std::get<std::string>(Row["ResourceID"]));
+                auto NewID = std::get<MBDB::IntType>(Row["ID"]);
+                auto Name = std::get<std::string>(Row["Name"]);
+                std::smatch Match;
+                if(std::regex_match(Name,Match,CurrentPart.RegexPattern))
+                {
+                    if(Offset + 1 == Parts.size())
+                    {
+                        ResourceHandle NewHandle;
+                        NewHandle.Id = std::move(NewHash);
+                        NewHandle.Path = CurrentPath;
+                        NewHandle.Path += "/";
+                        NewHandle.Path += Name;
+                        OutResult.emplace_back(MBLisp::Value::EmplaceExternal<ResourceHandle>(std::move(NewHandle)));
+                    }
+                    else
+                    {
+                        size_t PreviousPathSize = CurrentPath.size();
+                        CurrentPath += "/";
+                        CurrentPath += Name;
+                        GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
+                        CurrentPath.resize(PreviousPathSize);
+                    }
+                }
+            }
+        }
+        else
+        {
+            ExplicitName.Reset();
+            ExplicitName.BindValue("ParentHash",ParentInt);
+            ExplicitName.BindBlob("Name",CurrentPart.Name);
+            auto Rows = DB.GetAllRows(ExplicitName);
+            for(auto const& Row : Rows)
+            {
+                ID NewId;
+                NewId = MBChat2::StringToID(std::get<std::string>(Row["ResourceID"]));
+                auto Name = std::get<std::string>(Row["Name"]);
+                auto NewID = std::get<MBDB::IntType>(Row["ID"]);
+                if(Offset + 1 == Parts.size())
+                {
+                    ResourceHandle NewHandle;
+                    NewHandle.Id = std::move(NewId);
+                    NewHandle.Path = CurrentPath;
+                    NewHandle.Path += "/";
+                    NewHandle.Path += Name;
+                    OutResult.emplace_back(MBLisp::Value::EmplaceExternal<ResourceHandle>(std::move(NewHandle)));
+                }
+                else
+                {
+                    size_t PreviousPathSize = CurrentPath.size();
+                    CurrentPath += "/";
+                    CurrentPath += Name;
+                    GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
+                    CurrentPath.resize(PreviousPathSize);
+                }
+            }
+        }
+        if(RecursiveIndex != -1)
+        {
+            AllParent.Reset();
+            AllParent.BindValue("ParentHash",ParentInt);
+            auto Rows = DB.GetAllRows(AllParent);
+            for(auto const& Row : Rows)
+            {
+                ID NewId;
+                NewId = MBChat2::StringToID(std::get<std::string>(Row["ResourceID"]));
+                auto Name = std::get<std::string>(Row["Name"]);
+                auto NewID = std::get<MBDB::IntType>(Row["ID"]);
+                size_t PreviousPathSize = CurrentPath.size();
+                CurrentPath += "/";
+                CurrentPath += Name;
+                GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,RecursiveIndex,RecursiveIndex);
+                CurrentPath.resize(PreviousPathSize);
+            }
+        }
+    }
+    std::string GetAbsoluteResourcePath(DBConnection& Connection,ID const& Resource,MBDB::IntType& OutParent)
+    {
+        std::string ReturnValue = "/";
+        std::vector<std::string> Parents;
+        auto DB = Connection.GetDB();
+        auto GetParentStmt = DB->GetSQLStatement("SELECT ParentHash,Name FROM Resources WHERE Hash = :Hash");
+        auto CurrentResource = Resource;
+        while(true)
+        {
+            GetParentStmt.Reset();
+            GetParentStmt.BindBlob("Hash",CurrentResource);
+
+            auto Rows = DB->GetAllRows(GetParentStmt);
+            if(Rows.size() == 0)
+            {
+                if(CurrentResource != Connection.GetDBID())
+                {
+                    throw std::runtime_error("Database invariant broken when getting path for resource: Resource has no parent");   
+                }
+                break;   
+            }
+            auto const& ResourceRow = Rows[0];
+            Parents.push_back(std::get<std::string>(ResourceRow["Name"]));
+            CurrentResource = StringToID(std::get<std::string>(ResourceRow["ParentHash"]));
+        }
+        auto GetChildStatement = DB->GetSQLStatement("SELECT ID FROM ActiveTree WHERE Name = :Name AND ParentID = :ParentID");
+        MBDB::IntType CurrentParent = 0;
+        for(int i = Parents.size()-1; i >= 0; i--)
+        {
+            GetChildStatement.Reset();
+            GetChildStatement.BindValue("Name",Parents[i]);
+            GetChildStatement.BindValue("ParentID",CurrentParent);
+            {
+                auto Rows = DB->GetAllRows(GetChildStatement);
+                if(Rows.size() != 1)
+                {
+                    throw std::runtime_error(
+                            "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
+                            std::to_string(Rows.size()));
+                }
+                CurrentParent = std::get<MBDB::IntType>(Rows[0]["Hash"]);
+            }
+
+            ReturnValue += Parents[i];
+            if(i != 0)
+            {
+                ReturnValue += "/";   
+            }
+        }
+        OutParent = CurrentParent;
+        return ReturnValue;
+    }
+    void GetResource_Impl(DBConnection& Connection,
+                            MBLisp::List& OutResult ,
+                            std::vector<QueryPart> const& Parts,
+                            ID const& ResourceRoot,
+                            size_t Offset)
+    {
+        auto DB = Connection.GetDB();
+        MBDB::SQLStatement ExplicitName = DB->GetSQLStatement("SELECT ID,Hash,Name FROM ActiveTree WHERE ParentID = :ParentHash AND Name = :Name");
+        MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,Hash,Name FROM ActiveTree WHERE ParentID = :ParentHash");
+        MBDB::IntType ParentID = 0;
+        std::string ParentPath = GetAbsoluteResourcePath(Connection,ResourceRoot,ParentID);
+        GetResource_ImplPrepared(*DB,OutResult,ExplicitName,AllParent,Parts,ParentID,ParentPath,Offset);
+    }
+
+    MBLisp::Value GetResource(DBConnection& Connection,MBLisp::String const& Path)
+    {
+        auto Query = i_ParseQueryParts(Path);
+        MBLisp::List Result;
+        GetResource_Impl(Connection,Result,Query,Connection.GetDBID(),0);
+        if(Result.size() == 0)
+        {
+            throw std::runtime_error("Cannot find resource with path \""+Path+"\"");
+        }
+        return Result[0];
+    }
+
+    MBLisp::List GetResources(DBConnection& Connection,MBLisp::String const& Query)
+    {
+        auto QueryParts = i_ParseQueryParts(Query);
+        MBLisp::List Result;
+        GetResource_Impl(Connection,Result,QueryParts,Connection.GetDBID(),0);
+        return Result;
+    }
+
+    MBLisp::Value GetResource_Handle(DBConnection& Connection,ResourceHandle const& Root ,MBLisp::String const& Query)
+    {
+        auto QueryParts = i_ParseQueryParts(Query);
+        MBLisp::List Result;
+        GetResource_Impl(Connection,Result,QueryParts,Root.Id,0);
+        if(Result.size() == 0)
+        {
+            throw std::runtime_error("Cannot find resource with path \""+Query+"\"");
+        }
+        return Result[0];
+    }
+    MBLisp::List GetResources_Handle(DBConnection& Connection,ResourceHandle const& Root ,MBLisp::String const& Query)
+    {
+        auto QueryParts = i_ParseQueryParts(Query);
+        MBLisp::List Result;
+        GetResource_Impl(Connection,Result,QueryParts,Root.Id,0);
+        return Result;
+    }
+
+    void AddResource_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    {
+        ResourceContent NewContent;
+
+        auto QueryParts = i_ParseQueryParts(Path);
+        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
+                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
+        {
+            throw std::runtime_error("Error adding resource: invalid path \""+Path+"\"");
+        }
+        NewContent.Name = QueryParts.back().Name;
+        ID Parent = Connection.GetDBID();
+        if(QueryParts.size() > 0)
+        {
+            QueryParts.resize(QueryParts.size()-1);
+        }
+        if(QueryParts.size() != 0)
+        {
+            MBLisp::List Resources;
+            GetResource_Impl(Connection,Resources,QueryParts,Connection.GetDBID(),0);
+            if(Resources.size() != 1)
+            {
+                throw std::runtime_error("Error adding resource to specific path: directory query returned "+std::to_string(Resources.size())+" elements");
+            }
+            Parent = Resources[0].GetType<ResourceHandle>().Id;
+        }
+
+        Connection.UploadResource(std::move(NewContent));
+    }
+
+    void AddResource_Parent(DBConnection& Connection,ResourceHandle const& Parent,MBLisp::String const& Name,MBLisp::String const& Content)
+    {
+        ResourceContent NewContent;
+        NewContent.ParentHash = Parent.Id;
+        NewContent.Content = Content;
+        NewContent.Name = Name;
+        Connection.UploadResource(std::move(NewContent));
+    }
+
+    //MBLisp::List EditResource(DBConnection& Connection,ResourceHandle const& New)
+    //{
+
+    //}
+
 
     static MBLisp::Value Index_NewMessage(MBLisp::Evaluator& Evaluator
             ,NewMessage const& Message,MBLisp::Symbol Sym)
@@ -123,6 +493,16 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
         AssociatedEvaluator.AddGeneric<Connection_DB>(ReturnValue,"db");
         AssociatedEvaluator.AddGeneric<Index_NewMessage>("index");
+
+
+        AssociatedEvaluator.AddGeneric<GetResource>("get-resource");
+        AssociatedEvaluator.AddGeneric<GetResources>("get-resources");
+        AssociatedEvaluator.AddGeneric<GetResource_Handle>("get-resource");
+        AssociatedEvaluator.AddGeneric<GetResources_Handle>("get-resources");
+        AssociatedEvaluator.AddGeneric<AddResource_Path>("add-resource");
+        AssociatedEvaluator.AddGeneric<AddResource_Parent>("add-resource");
+        AssociatedEvaluator.AddGeneric<GetContent>("get-content");
+        AssociatedEvaluator.AddGeneric<GetPath>("get-content");
 
         return ReturnValue;
     }

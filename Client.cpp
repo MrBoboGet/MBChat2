@@ -24,23 +24,14 @@ namespace MBChat2
         }
         return It->second.Visualiser.back().get();
     }
-    bool Client::DBWindow::Updated()
+    bool Client::DBWindow::HandleInput(MBCLI::ConsoleInput const& Input)
     {
         auto ActiveWindow = p_GetActiveWindow();
         if(ActiveWindow == nullptr)
         {
-            return true;   
+            return false;   
         }
-        return ActiveWindow->Updated();
-    }
-    void Client::DBWindow::HandleInput(MBCLI::ConsoleInput const& Input)
-    {
-        auto ActiveWindow = p_GetActiveWindow();
-        if(ActiveWindow == nullptr)
-        {
-            return;   
-        }
-        ActiveWindow->HandleInput(Input);
+        return ActiveWindow->HandleInput(Input);
     }
     MBCLI::Dimensions Client::DBWindow::GetDimensions()
     {

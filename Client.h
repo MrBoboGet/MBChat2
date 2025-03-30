@@ -66,8 +66,7 @@ namespace MBChat2
             }
             MBCLI::Dimensions GetDimensions();
             
-            virtual bool Updated();
-            virtual void HandleInput(MBCLI::ConsoleInput const& Input);
+            virtual bool HandleInput(MBCLI::ConsoleInput const& Input);
             virtual void SetFocus(bool IsFocused);
             virtual MBCLI::CursorInfo GetCursorInfo();
             virtual void WriteBuffer(MBCLI::BufferView View,bool Redraw);

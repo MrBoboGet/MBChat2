@@ -269,6 +269,7 @@ namespace MBChat2
         ContentType Type = ContentType::Text;
         UploadType UpType = UploadType::New;
         Hash ParentHash;
+        std::string Name;
         std::string Content;
     };
     struct PublishableResourceHeader
