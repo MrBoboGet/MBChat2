@@ -300,6 +300,66 @@ namespace MBChat2
         }
     }
     //
+    std::string ConnectionManager::SharedState::GetAbsoluteResourcePath
+        (ID const& DBID,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
+    {
+        std::string ReturnValue;
+        std::vector<std::string> Parents;
+        auto DB = &this->DB;
+        auto GetParentStmt = DB->GetSQLStatement(
+                "SELECT ParentHash,Name FROM Resources WHERE Hash = :Hash AND DatabaseHash = :DatabaseID");
+        auto CurrentResource = Resource;
+        while(true)
+        {
+            GetParentStmt.Reset();
+            GetParentStmt.BindBlob("DatabaseID",DBID);
+            GetParentStmt.BindBlob("Hash",CurrentResource);
+
+            auto Rows = DB->GetAllRows(GetParentStmt);
+            if(Rows.size() == 0)
+            {
+                if(CurrentResource != DBID)
+                {
+                    throw std::runtime_error("Database invariant broken when getting path for resource: Resource has no parent");   
+                }
+                break;   
+            }
+            auto const& ResourceRow = Rows[0];
+            Parents.push_back(std::get<std::string>(ResourceRow["Name"]));
+            CurrentResource = StringToID(std::get<std::string>(ResourceRow["ParentHash"]));
+        }
+        auto GetChildStatement = DB->GetSQLStatement(
+                "SELECT ID,ParentID FROM ActiveTree WHERE Name = :Name AND ParentID = :ParentID AND DatabaseID = :DatabaseID");
+        MBDB::IntType CurrentParent = -1;
+        MBDB::IntType CurrentID = -1;
+        for(int i = Parents.size()-1; i >= 0; i--)
+        {
+            ReturnValue += "/";   
+            GetChildStatement.Reset();
+            GetChildStatement.BindValue("Name",Parents[i]);
+            GetChildStatement.BindValue("ParentID",CurrentParent);
+            GetChildStatement.BindValue("DatabaseID",DBID);
+            {
+                auto Rows = DB->GetAllRows(GetChildStatement);
+                if(Rows.size() != 1)
+                {
+                    throw std::runtime_error(
+                            "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
+                            std::to_string(Rows.size()));
+                }
+                CurrentParent = std::get<MBDB::IntType>(Rows[0]["ParentID"]);
+                CurrentID = std::get<MBDB::IntType>(Rows[0]["ID"]);
+            }
+
+            ReturnValue += Parents[i];
+        }
+        OutParent = CurrentParent;
+        return ReturnValue;
+    }
+    std::string ConnectionManager::GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
+    {
+        return m_State->GetAbsoluteResourcePath(DB,Resource,OutParent,OutID);
+    }
     void ConnectionManager::AddConnections(std::vector<PeerInfo> const& Peers)
     {
         std::lock_guard StateLock(m_State->StateMutex);
@@ -394,6 +454,7 @@ namespace MBChat2
         NotificationToSend.Content = std::move(PublishedMessage.Content);
         NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
         NotificationToSend.Header.ParentHash = std::move(PublishedMessage.ParentHash);
+        NotificationToSend.Header.Name = std::move(PublishedMessage.Name);
         NotificationToSend.Header.ContentHash = std::move(PublishedMessage.ContentHash);
         NotificationToSend.Header.Uploader = m_State->HostID;
         NotificationToSend.Header.HeaderHash = NotificationToSend.Header.CalculateHeaderHash();
@@ -766,6 +827,27 @@ namespace MBChat2
         Stmt.BindInt("LocalTimestamp",std::chrono::steady_clock::now().time_since_epoch().count());
         auto Result = DB.GetAllRows(Stmt);
 
+
+        //update tree
+        MBDB::IntType ParentID = -1;
+        MBDB::IntType RowID = -1;
+        auto Path = GetAbsoluteResourcePath(Header.OriginalDatabaseHash.Content,Header.ParentHash.Content,ParentID,RowID);
+        if(RowID == -1)
+        {
+            auto InsertStatement = DB.GetSQLStatement(
+                    "INSERT INTO ActiveTree VALUES(:Name,:ParentID,:ResourceID,:DatabaseID);");
+            InsertStatement.BindValue("Name",Header.Name);
+            InsertStatement.BindValue("ParentID",Header.ParentHash.Content);
+            InsertStatement.BindValue("ResourceID",Header.HeaderHash.Content);
+            InsertStatement.BindValue("DatabaseID",Header.OriginalDatabaseHash.Content);
+        }
+        else 
+        {
+            auto InsertStatement = DB.GetSQLStatement(
+                    "UPDATE ActiveTree SET ResourceID = :ResourceID WHERE ID = :ID;");
+            InsertStatement.BindValue("ResourceID",Header.HeaderHash.Content);
+            InsertStatement.BindValue("ID",RowID);
+        }
     }
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)
     {

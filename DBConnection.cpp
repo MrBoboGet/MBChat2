@@ -10,12 +10,21 @@ namespace MBChat2
         HeaderToPublish.ParentHash = std::move(NewResource.ParentHash);
         HeaderToPublish.Type = NewResource.Type;
         HeaderToPublish.UpType = NewResource.UpType;
+        HeaderToPublish.Name = NewResource.Name;
+        if(HeaderToPublish.Name.empty())
+        {
+            HeaderToPublish.Name = IDToString(HeaderToPublish.ContentHash.Content);
+        }
         HeaderToPublish.DatabaseHash = m_DatabaseID;
         if(HeaderToPublish.ParentHash.Content.size() == 0)
         {
             HeaderToPublish.ParentHash = LatestID();   
         }
         m_ConnectionManager->PublishMessage(std::move(HeaderToPublish));
+    }
+    std::string DBConnection::GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID)
+    {
+        return m_ConnectionManager->GetAbsoluteResourcePath(GetDBID(),ResourceRoot,ParentID,OutID);
     }
     ID DBConnection::LatestID()
     {

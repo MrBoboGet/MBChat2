@@ -13,6 +13,7 @@ namespace MBChat2
 {
 
     typedef MBUtility::MOFunction<std::unique_ptr<DBVisualiser>()> VisualiserFactory;
+    typedef MBUtility::MOFunction<void(std::vector<MBLisp::Value> const&)> CommandFunc;
 
     class Client : public std::enable_shared_from_this<Client>
     {
@@ -26,6 +27,7 @@ namespace MBChat2
         std::shared_ptr<MBLisp::Evaluator> m_Evaluator;
 
         MBTUI::REPL m_CommandRepl;
+        std::vector<std::string> p_CompletionFunc(MBTUI::REPL_Line  const& LineInfo);
 
         //struct CommandWindow
         //{
@@ -46,6 +48,7 @@ namespace MBChat2
         
         std::unordered_map<ID,DBVisualiserInfo> m_ActiveVisualiser;
         std::unordered_map<std::string,VisualiserFactory> m_RegisteredVisualisers;
+        std::unordered_map<std::string,CommandFunc> m_RegisteredCommands;
 
         ID m_LocalID;
 
@@ -81,6 +84,7 @@ namespace MBChat2
         void p_DisplayError(std::string const& ErrorMessage);
 
         void p_AddVisualiser(DatabaseDefinition const& Database);
+        DatabaseDefinition p_LoadDatabase(ID const& DBID);
 
 
         void p_ResourceRecievedHandler(NewMessage const& Header);
@@ -95,6 +99,13 @@ namespace MBChat2
     public:
         void AddVisualiser(std::string const& DatabaseType,
                 VisualiserFactory Factory);
+        void AddCommand(std::string const& CommandName, CommandFunc Result);
+        void DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow);
+        void OpenDatabase(ID const& DatabaseID);
+        DatabaseDefinition CreateDatabase(DatabaseDefinition Definition);
+        std::vector<DatabaseDefinition> GetDatabases();
+
+
         static std::shared_ptr<Client> MakeClient();
         Client(Client&&) = delete;
         Client& operator=(Client&&) = delete;

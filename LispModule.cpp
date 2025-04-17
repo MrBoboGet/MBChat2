@@ -1,11 +1,13 @@
 #include "LispModule.h"
 #include <MBLisp/Evaluator.h>
+#include <MBLisp/Modules/CLI/CLI.h>
 
 namespace MBChat2
 {
     LispVisualiser::LispVisualiser(std::shared_ptr<MBLisp::Evaluator> Evaluator,MBLisp::Value Val)
         : m_UnderylingWindow(Evaluator,Val)
     {
+        SetChild(m_UnderylingWindow);
         m_ChatScope = Evaluator->GetModuleScope("mbchat");
     }
     void LispVisualiser::Init() 
@@ -117,7 +119,7 @@ namespace MBChat2
         bool HasRecursive = false;
         while(ParseOffset < Query.size())
         {
-            auto NextDelim = Query.find('/');
+            auto NextDelim = Query.find('/',ParseOffset);
             size_t NextNonWhitespace = ParseOffset; 
             MBParsing::SkipWhitespace(Query,ParseOffset,&NextNonWhitespace);
             if(NextNonWhitespace ==  NextDelim)
@@ -171,8 +173,6 @@ namespace MBChat2
                 }
                 NewPart.RegexPattern = std::regex(RegexString);
             }
-
-            ParseOffset = NextDelim+1;
             if(NewPart.RecursiveAll)
             {
                 if(HasRecursive)
@@ -181,6 +181,11 @@ namespace MBChat2
                 }
                 HasRecursive = true;
             }
+            if(NextDelim == Query.npos)
+            {
+                break;   
+            }
+            ParseOffset = NextDelim+1;
         }
         if(ReturnValue.size() == 0)
         {
@@ -210,7 +215,7 @@ namespace MBChat2
         else if(CurrentPart.Wildcard)
         {
             AllParent.Reset();
-            AllParent.BindValue("ParentHash",ParentInt);
+            AllParent.BindValue("ParentID",ParentInt);
             auto Rows = DB.GetAllRows(AllParent);
             for(auto const& Row : Rows)
             {
@@ -244,7 +249,7 @@ namespace MBChat2
         else
         {
             ExplicitName.Reset();
-            ExplicitName.BindValue("ParentHash",ParentInt);
+            ExplicitName.BindValue("ParentID",ParentInt);
             ExplicitName.BindBlob("Name",CurrentPart.Name);
             auto Rows = DB.GetAllRows(ExplicitName);
             for(auto const& Row : Rows)
@@ -275,7 +280,7 @@ namespace MBChat2
         if(RecursiveIndex != -1)
         {
             AllParent.Reset();
-            AllParent.BindValue("ParentHash",ParentInt);
+            AllParent.BindValue("ParentID",ParentInt);
             auto Rows = DB.GetAllRows(AllParent);
             for(auto const& Row : Rows)
             {
@@ -291,58 +296,6 @@ namespace MBChat2
             }
         }
     }
-    std::string GetAbsoluteResourcePath(DBConnection& Connection,ID const& Resource,MBDB::IntType& OutParent)
-    {
-        std::string ReturnValue = "/";
-        std::vector<std::string> Parents;
-        auto DB = Connection.GetDB();
-        auto GetParentStmt = DB->GetSQLStatement("SELECT ParentHash,Name FROM Resources WHERE Hash = :Hash");
-        auto CurrentResource = Resource;
-        while(true)
-        {
-            GetParentStmt.Reset();
-            GetParentStmt.BindBlob("Hash",CurrentResource);
-
-            auto Rows = DB->GetAllRows(GetParentStmt);
-            if(Rows.size() == 0)
-            {
-                if(CurrentResource != Connection.GetDBID())
-                {
-                    throw std::runtime_error("Database invariant broken when getting path for resource: Resource has no parent");   
-                }
-                break;   
-            }
-            auto const& ResourceRow = Rows[0];
-            Parents.push_back(std::get<std::string>(ResourceRow["Name"]));
-            CurrentResource = StringToID(std::get<std::string>(ResourceRow["ParentHash"]));
-        }
-        auto GetChildStatement = DB->GetSQLStatement("SELECT ID FROM ActiveTree WHERE Name = :Name AND ParentID = :ParentID");
-        MBDB::IntType CurrentParent = 0;
-        for(int i = Parents.size()-1; i >= 0; i--)
-        {
-            GetChildStatement.Reset();
-            GetChildStatement.BindValue("Name",Parents[i]);
-            GetChildStatement.BindValue("ParentID",CurrentParent);
-            {
-                auto Rows = DB->GetAllRows(GetChildStatement);
-                if(Rows.size() != 1)
-                {
-                    throw std::runtime_error(
-                            "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
-                            std::to_string(Rows.size()));
-                }
-                CurrentParent = std::get<MBDB::IntType>(Rows[0]["Hash"]);
-            }
-
-            ReturnValue += Parents[i];
-            if(i != 0)
-            {
-                ReturnValue += "/";   
-            }
-        }
-        OutParent = CurrentParent;
-        return ReturnValue;
-    }
     void GetResource_Impl(DBConnection& Connection,
                             MBLisp::List& OutResult ,
                             std::vector<QueryPart> const& Parts,
@@ -350,10 +303,11 @@ namespace MBChat2
                             size_t Offset)
     {
         auto DB = Connection.GetDB();
-        MBDB::SQLStatement ExplicitName = DB->GetSQLStatement("SELECT ID,Hash,Name FROM ActiveTree WHERE ParentID = :ParentHash AND Name = :Name");
-        MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,Hash,Name FROM ActiveTree WHERE ParentID = :ParentHash");
+        MBDB::SQLStatement ExplicitName = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID AND Name = :Name");
+        MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID");
         MBDB::IntType ParentID = 0;
-        std::string ParentPath = GetAbsoluteResourcePath(Connection,ResourceRoot,ParentID);
+        MBDB::IntType OutID = 0;
+        std::string ParentPath =  Connection.GetAbsoluteResourcePath(ResourceRoot,ParentID,OutID);
         GetResource_ImplPrepared(*DB,OutResult,ExplicitName,AllParent,Parts,ParentID,ParentPath,Offset);
     }
 
@@ -452,6 +406,17 @@ namespace MBChat2
         }
         return ReturnValue;
     }
+    static MBLisp::Value Index_Database(MBLisp::Evaluator& Evaluator
+            ,DatabaseDefinition const& Message,MBLisp::Symbol Sym)
+    {
+        MBLisp::Value ReturnValue;
+        auto const& SymString = Evaluator.GetSymbolString(Sym.ID);
+        if(SymString == "type")
+        {
+            return Message.Type;
+        }
+        return ReturnValue;
+    }
 
     static void AddVisualiser(MBLisp::Evaluator& Evaluator,Client& Client,MBLisp::String const& Type,MBLisp::Value LispValue)
     {
@@ -474,6 +439,12 @@ namespace MBChat2
     {
         return MBLisp::FromShared(Connection.GetDB());
     }
+    static DatabaseDefinition NewDB(MBLisp::String const& Type)
+    {
+        DatabaseDefinition Def;
+        Def.Type = Type;
+        return Def;
+    }
 
     MBLisp::Ref<MBLisp::Scope> ChatLispModule::GetModuleScope(MBLisp::Evaluator& AssociatedEvaluator) 
     {
@@ -488,11 +459,68 @@ namespace MBChat2
         AssociatedEvaluator.AddObjectMethod<&DBConnection::LatestID>(ReturnValue,"latest-id");
         AssociatedEvaluator.AddObjectMethod<&LispVisualiser::GetConnectionRef>(ReturnValue,"connection");
         AssociatedEvaluator.AddGeneric<UploadString>(ReturnValue,"upload-resource");
-        AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
 
         AssociatedEvaluator.AddGeneric<AddVisualiser>(ReturnValue,"add-visualiser");
+
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"add-command",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::String const& CommandName,MBLisp::Value const& Val) mutable
+                {
+                    Client->AddCommand(CommandName,[Val = Val,Evaluator=Evaluator](std::vector<MBLisp::Value> const& Args)
+                            {
+                                MBLisp::FuncArgVector CallArgs;
+                                for(auto const& Arg : Args)
+                                {
+                                    CallArgs.push_back(Arg);
+                                }
+                                Evaluator->Eval(Val,std::move(CallArgs));
+                            });
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"display-overlay",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::Value Value) mutable
+                {
+                    MBUtility::SmartPtr<MBCLI::Window> Window;
+                    if(Value.IsType<MBCLI::Window>())
+                    {
+                        Window = Value.GetSharedPtr<MBCLI::Window>();
+                    }
+                    else
+                    {
+                        Window = std::unique_ptr<MBCLI::Window>(std::make_unique<MBLisp::LispWindow>(Evaluator,Value));
+                    }
+                    Client->DisplayOverlay(std::move(Window));
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"display-db",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::String const& Val) mutable
+                {
+                    Client->OpenDatabase(StringToID(Val));
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"display-db",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](DatabaseDefinition const& Val) mutable
+                {
+                    Client->OpenDatabase(Val.DatabaseID.Content);
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"get-databases",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()]() mutable
+                {
+                    MBLisp::List ReturnValue;
+                    auto Databases = Client->GetDatabases();
+                    for(auto& DB : Databases)
+                    {
+                        ReturnValue.emplace_back(
+                                MBLisp::Value::EmplaceExternal<DatabaseDefinition>(DB));
+                    }
+                    return ReturnValue;
+                });
+        AssociatedEvaluator.AddGeneric<NewDB>(ReturnValue,"new-db");
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"create-db",
+                [Client=m_AssociatedClient](DatabaseDefinition const& Def) mutable
+                {
+                    return Client->CreateDatabase(Def);
+                });
+
         AssociatedEvaluator.AddGeneric<Connection_DB>(ReturnValue,"db");
         AssociatedEvaluator.AddGeneric<Index_NewMessage>("index");
+        AssociatedEvaluator.AddGeneric<Index_Database>("index");
 
 
         AssociatedEvaluator.AddGeneric<GetResource>("get-resource");
@@ -503,6 +531,9 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<AddResource_Parent>("add-resource");
         AssociatedEvaluator.AddGeneric<GetContent>("get-content");
         AssociatedEvaluator.AddGeneric<GetPath>("get-content");
+
+        AssociatedEvaluator.AddType<DatabaseDefinition>(ReturnValue,"db-def_t");
+        AssociatedEvaluator.AddType<Message>(ReturnValue,"message_t");
 
         return ReturnValue;
     }

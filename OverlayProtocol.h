@@ -177,6 +177,7 @@ namespace MBChat2
         uint64_t ContentSize = 0;
         Hash OriginalDatabaseHash;
         Hash ParentHash;
+        std::string Name;
         Hash ContentHash;
         Hash Uploader;
         Signature Sig;
@@ -190,6 +191,7 @@ namespace MBChat2
             Stream & Value.ContentSize;
             Parse(Stream,Value.OriginalDatabaseHash,Version);
             Parse(Stream,Value.ParentHash,Version);
+            Stream & Value.Name;
             Parse(Stream,Value.ContentHash,Version);
             Parse(Stream,Value.Uploader,Version);
             Parse(Stream,Value.Sig,Version);
@@ -278,6 +280,7 @@ namespace MBChat2
         UploadType UpType = UploadType::New;
         Hash DatabaseHash;
         Hash ParentHash;
+        std::string Name;
         Hash ContentHash;
         std::string Content;
     };

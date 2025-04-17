@@ -80,7 +80,12 @@ namespace MBChat2
             auto const& Character = NewInput.GetType<MBCLI::ConsoleInput>();
             if(m_LayerHandleInput)
             {
-                m_TopLayerer.HandleInput(Character);
+                auto Result = m_TopLayerer.HandleInput(Character);
+                if(!Result)
+                {
+                    m_TopLayerer.PopLayer();
+                    m_LayerHandleInput = false;
+                }
             }
             else
             {
@@ -93,7 +98,14 @@ namespace MBChat2
                 }
                 else 
                 {
-                    m_TopWindow.HandleInput(Character);
+                    try
+                    {
+                        m_TopWindow.HandleInput(Character);
+                    }
+                    catch(std::exception const& e)
+                    {
+                        p_DisplayError(e.what());
+                    }
                 }
             }
         }
@@ -106,6 +118,74 @@ namespace MBChat2
             VisualiserFactory VisualiserCreator)
     {
         m_RegisteredVisualisers[DatabaseType] = std::move(VisualiserCreator);
+    }
+    std::vector<std::string> Client::p_CompletionFunc(MBTUI::REPL_Line  const& LineInfo)
+    {
+        std::vector<std::string> ReturnValue;
+        if(LineInfo.Tokens.size() == 1)
+        {
+            for(auto const& Command : m_RegisteredCommands)
+            {
+                ReturnValue.emplace_back(Command.first);
+            }
+        }
+        return ReturnValue;
+    }
+    void Client::AddCommand(std::string const& CommandName, MBUtility::MOFunction<void(std::vector<MBLisp::Value> const&)> Result)
+    {
+        m_RegisteredCommands[CommandName] = std::move(Result);
+    }
+    void Client::DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow)
+    {
+        if(m_LayerHandleInput)
+        {
+            throw std::runtime_error("Windows is already being displayed!");
+        }
+        m_LayerHandleInput = true;
+        m_TopLayerer.AddLayer(std::move(TopWindow));
+    }
+    DatabaseDefinition Client::p_LoadDatabase(ID const& DBID)
+    {
+        DatabaseDefinition ReturnValue;
+        ReturnValue.DatabaseID = DBID;
+        auto Statement = m_LocalDB->GetSQLStatement(
+                "SELECT Type,Time FROM Databases WHERE Hash=:ID");
+        Statement.BindBlob("ID",DBID);
+        auto Result = m_LocalDB->GetAllRows(Statement);
+        if(Result.size() == 0)
+        {
+            throw std::runtime_error("Could not load database: invalid database ID");
+        }
+        else if(Result.size() > 1)
+        {
+            throw std::runtime_error("Database invariant violated: multiple databases with the same ID");
+        }
+        ReturnValue.Timestamp = std::get<MBDB::IntType>(Result[0]["Time"]);
+        ReturnValue.Type = std::get<std::string>(Result[0]["Type"]);
+        return ReturnValue;
+    }
+    void Client::OpenDatabase(ID const& DatabaseID)
+    {
+        DatabaseDefinition DB = p_LoadDatabase(DatabaseID);
+        p_AddVisualiser(DB);
+    }
+    DatabaseDefinition Client::CreateDatabase(DatabaseDefinition Definition)
+    {
+        Definition.Timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        Definition.CalculateHash();
+        m_ConnectionManager->CreateDB(Definition);
+        return Definition;
+    }
+    std::vector<DatabaseDefinition> Client::GetDatabases()
+    {
+        std::vector<DatabaseDefinition> ReturnValue;
+        auto Statement = m_LocalDB->GetSQLStatement("SELECT Hash FROM Databases");
+        auto Result = m_LocalDB->GetAllRows(Statement);
+        for(auto const& Row : Result)
+        {
+            ReturnValue.emplace_back(p_LoadDatabase(StringToID(std::get<std::string>(Row["Hash"]))));
+        }
+        return ReturnValue;
     }
     std::shared_ptr<Client> Client::MakeClient()
     {
@@ -183,8 +263,30 @@ namespace MBChat2
                     }
                 }
             }
+            else
+            {
+                m_TopLayerer.PopLayer();
+                m_LayerHandleInput = false;
+                auto It = m_RegisteredCommands.find(Tokens[0]);
+                if(It != m_RegisteredCommands.end())
+                {
+                    std::vector<MBLisp::Value> Args;
+                    for(size_t i = 1; i < Tokens.size();i++)
+                    {
+                        Args.push_back(MBLisp::Value(Tokens[i]));
+                    }
+                    try
+                    {
+                        It->second(Args);
+                    }
+                    catch(std::exception const& e)
+                    {
+                        p_DisplayError(e.what());
+                    }
+                }
+                return;
+            }
         }
-
         m_TopLayerer.PopLayer();
         m_LayerHandleInput = false;
     }
@@ -256,6 +358,7 @@ namespace MBChat2
         auto TermInfo = m_Terminal.GetTerminalInfo();
         NewVisualiser->Init();
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
+        m_DBVisualiserWindow->SetChild(*VisualisersInfo.Visualiser.back());
         m_TopWindow.MoveRight();
     }
     void Client::p_ResourceRecievedHandler(NewMessage const& Header)
@@ -303,6 +406,11 @@ namespace MBChat2
         MBSockets::Init();
         int ReturnValue = 0;
 
+
+        m_CommandRepl.AddCompletionFunc([This = shared_from_this()](MBTUI::REPL_Line const& Line)
+                {
+                    return This->p_CompletionFunc(Line);
+                } );
 
         m_Evaluator = MBLisp::Evaluator::CreateEvaluator();
         m_Evaluator->AddInternalModule("mbchat",
@@ -474,6 +582,9 @@ namespace MBChat2
                 m_RecievedEvents.clear();
             }
             p_HandleEvent(NewInput);
+            auto VisualiserUpdated = m_DBVisualiserWindow->Updated();
+            auto TopUpdated = m_TopWindow.Updated();
+            auto LayerUpdated = m_TopLayerer.Updated();
             m_Terminal.WriteWindow(m_TopLayerer);
         }
         return ReturnValue;

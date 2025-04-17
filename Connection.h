@@ -405,6 +405,7 @@ namespace MBChat2
             void NotificationHandler(MessageLocation Location,UDPNotification const& Notification);
             UDPResponse RequestHandler(MessageLocation Location,UDPRequest const& Notification);
             void AddResourceToDB(ResourceHeader const& Header,std::string const& Content);
+            std::string GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID);
             bool ResourceInDB(Hash const& Resource);
             bool SubscribedToDB(Hash const& DBID);
             void AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions);
@@ -710,7 +711,10 @@ namespace MBChat2
 
         //MBUtility::Future<std::shared_ptr<Connection>> 
         //    EstablishDirectConnection(ID const& PeerID);
-
+        
+          
+        
+        std::string GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID);
         void AddConnections(std::vector<PeerInfo> const& Peers);
         void AddConnection(PeerInfo Peer);
         void PublishMessage(PublishableResourceHeader Message);
