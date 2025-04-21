@@ -337,22 +337,30 @@ namespace MBChat2
             ReturnValue += "/";   
             GetChildStatement.Reset();
             GetChildStatement.BindValue("Name",Parents[i]);
-            GetChildStatement.BindValue("ParentID",CurrentParent);
+            GetChildStatement.BindValue("ParentID",CurrentID);
             GetChildStatement.BindValue("DatabaseID",DBID);
+            ReturnValue += Parents[i];
             {
                 auto Rows = DB->GetAllRows(GetChildStatement);
                 if(Rows.size() != 1)
                 {
+                    if(Rows.size() == 0 && i == 0)
+                    {
+                        CurrentParent = CurrentID;
+                        CurrentID = -1;
+                        break;   
+                    }
                     throw std::runtime_error(
                             "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
                             std::to_string(Rows.size()));
+
                 }
                 CurrentParent = std::get<MBDB::IntType>(Rows[0]["ParentID"]);
                 CurrentID = std::get<MBDB::IntType>(Rows[0]["ID"]);
             }
 
-            ReturnValue += Parents[i];
         }
+        OutID = CurrentID;
         OutParent = CurrentParent;
         return ReturnValue;
     }
@@ -798,11 +806,12 @@ namespace MBChat2
     {
         auto Stmt = DB.GetSQLStatement(
                 "INSERT INTO Resources(Hash,ContentType,UpType,Time,ContentSize,DatabaseHash,ParentHash,ContentHash, "
-            "UploaderID,Signature,StoredLocaly,StoredInline,Content,RecievedTimestamp) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
-            ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content,:LocalTimestamp)");
+            "UploaderID,Signature,StoredLocaly,StoredInline,Content,RecievedTimestamp,Name) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
+            ":ParentHash,:ContentHash,:UploaderID,:Signature,:StoredLocaly,:StoredInline,:Content,:LocalTimestamp,:Name)");
         //stmt.bind
         Stmt.BindBlob("Hash",Header.HeaderHash.Content);
         Stmt.BindValue("ContentType",Header.Type);
+        Stmt.BindValue("Name",Header.Name);
         Stmt.BindValue("UpType",Header.UpType);
         Stmt.BindValue("Timestamp",Header.TimeStamp);
         Stmt.BindValue("ContentSize",Header.ContentSize);
@@ -831,15 +840,17 @@ namespace MBChat2
         //update tree
         MBDB::IntType ParentID = -1;
         MBDB::IntType RowID = -1;
-        auto Path = GetAbsoluteResourcePath(Header.OriginalDatabaseHash.Content,Header.ParentHash.Content,ParentID,RowID);
+        auto Path = GetAbsoluteResourcePath(Header.OriginalDatabaseHash.Content,Header.HeaderHash.Content,ParentID,RowID);
         if(RowID == -1)
         {
             auto InsertStatement = DB.GetSQLStatement(
-                    "INSERT INTO ActiveTree VALUES(:Name,:ParentID,:ResourceID,:DatabaseID);");
+                    " INSERT INTO ActiveTree(ID,Name,ParentID,ResourceID,DatabaseID) "
+                    " VALUES(NULL,:Name,:ParentID,:ResourceID,:DatabaseID); ");
             InsertStatement.BindValue("Name",Header.Name);
-            InsertStatement.BindValue("ParentID",Header.ParentHash.Content);
+            InsertStatement.BindValue("ParentID",ParentID);
             InsertStatement.BindValue("ResourceID",Header.HeaderHash.Content);
             InsertStatement.BindValue("DatabaseID",Header.OriginalDatabaseHash.Content);
+            DB.GetAllRows(InsertStatement);
         }
         else 
         {
@@ -847,6 +858,7 @@ namespace MBChat2
                     "UPDATE ActiveTree SET ResourceID = :ResourceID WHERE ID = :ID;");
             InsertStatement.BindValue("ResourceID",Header.HeaderHash.Content);
             InsertStatement.BindValue("ID",RowID);
+            DB.GetAllRows(InsertStatement);
         }
     }
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)

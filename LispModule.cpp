@@ -250,7 +250,7 @@ namespace MBChat2
         {
             ExplicitName.Reset();
             ExplicitName.BindValue("ParentID",ParentInt);
-            ExplicitName.BindBlob("Name",CurrentPart.Name);
+            ExplicitName.BindString("Name",CurrentPart.Name);
             auto Rows = DB.GetAllRows(ExplicitName);
             for(auto const& Row : Rows)
             {
@@ -318,7 +318,8 @@ namespace MBChat2
         GetResource_Impl(Connection,Result,Query,Connection.GetDBID(),0);
         if(Result.size() == 0)
         {
-            throw std::runtime_error("Cannot find resource with path \""+Path+"\"");
+            //throw std::runtime_error("Cannot find resource with path \""+Path+"\"");
+            return MBLisp::Value();
         }
         return Result[0];
     }
@@ -338,7 +339,8 @@ namespace MBChat2
         GetResource_Impl(Connection,Result,QueryParts,Root.Id,0);
         if(Result.size() == 0)
         {
-            throw std::runtime_error("Cannot find resource with path \""+Query+"\"");
+            //throw std::runtime_error("Cannot find resource with path \""+Query+"\"");
+            return MBLisp::Value();
         }
         return Result[0];
     }
@@ -353,7 +355,7 @@ namespace MBChat2
     void AddResource_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
     {
         ResourceContent NewContent;
-
+        NewContent.Content = Content;
         auto QueryParts = i_ParseQueryParts(Path);
         if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
                     {return !Part.RecursiveAll && !Part.Wildcard;})  )
@@ -376,7 +378,28 @@ namespace MBChat2
             }
             Parent = Resources[0].GetType<ResourceHandle>().Id;
         }
-
+        NewContent.ParentHash.Content = Parent;
+        Connection.UploadResource(std::move(NewContent));
+    }
+    void AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    {
+        ResourceContent NewContent;
+        NewContent.Content = Content;
+        auto QueryParts = i_ParseQueryParts(Path);
+        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
+                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
+        {
+            throw std::runtime_error("Error adding resource: invalid path \""+Path+"\"");
+        }
+        //NewContent.Name = QueryParts.back().Name;
+        MBLisp::List Resources;
+        GetResource_Impl(Connection,Resources,QueryParts,Connection.GetDBID(),0);
+        if(Resources.size() != 1)
+        {
+            throw std::runtime_error("Error adding resource to specific path: directory query returned "+std::to_string(Resources.size())+" elements");
+        }
+        auto Parent = Resources[0].GetType<ResourceHandle>().Id;
+        NewContent.ParentHash.Content = Parent;
         Connection.UploadResource(std::move(NewContent));
     }
 
@@ -523,17 +546,22 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<Index_Database>("index");
 
 
-        AssociatedEvaluator.AddGeneric<GetResource>("get-resource");
-        AssociatedEvaluator.AddGeneric<GetResources>("get-resources");
-        AssociatedEvaluator.AddGeneric<GetResource_Handle>("get-resource");
-        AssociatedEvaluator.AddGeneric<GetResources_Handle>("get-resources");
-        AssociatedEvaluator.AddGeneric<AddResource_Path>("add-resource");
-        AssociatedEvaluator.AddGeneric<AddResource_Parent>("add-resource");
-        AssociatedEvaluator.AddGeneric<GetContent>("get-content");
-        AssociatedEvaluator.AddGeneric<GetPath>("get-content");
+        AssociatedEvaluator.AddGeneric<GetResource>(ReturnValue,"get-resource");
+        AssociatedEvaluator.AddGeneric<GetResource_Handle>(ReturnValue,"get-resource");
+        AssociatedEvaluator.AddGeneric<GetResources>(ReturnValue,"get-resources");
+        AssociatedEvaluator.AddGeneric<GetResources_Handle>(ReturnValue,"get-resources");
+
+        AssociatedEvaluator.AddGeneric<AddResource_Path>(ReturnValue,"add-resource");
+        AssociatedEvaluator.AddGeneric<AddResource_Parent>(ReturnValue,"add-resource");
+
+        AssociatedEvaluator.AddGeneric<AddChild_Path>(ReturnValue,"add-child");
+
+        AssociatedEvaluator.AddGeneric<GetContent>(ReturnValue,"get-content");
+        AssociatedEvaluator.AddGeneric<GetPath>(ReturnValue,"get-path");
 
         AssociatedEvaluator.AddType<DatabaseDefinition>(ReturnValue,"db-def_t");
         AssociatedEvaluator.AddType<Message>(ReturnValue,"message_t");
+        AssociatedEvaluator.AddType<ResourceHandle>(ReturnValue,"resource-handle_t");
 
         return ReturnValue;
     }

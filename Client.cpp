@@ -587,6 +587,7 @@ namespace MBChat2
             auto LayerUpdated = m_TopLayerer.Updated();
             m_Terminal.WriteWindow(m_TopLayerer);
         }
+
         return ReturnValue;
     }
 }
