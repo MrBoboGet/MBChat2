@@ -300,10 +300,10 @@ namespace MBChat2
         }
     }
     //
-    std::string ConnectionManager::SharedState::GetAbsoluteResourcePath
+    std::vector<std::string> ConnectionManager::SharedState::GetAbsoluteResourcePath
         (ID const& DBID,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
     {
-        std::string ReturnValue;
+        std::vector<std::string> ReturnValue;
         std::vector<std::string> Parents;
         auto DB = &this->DB;
         auto GetParentStmt = DB->GetSQLStatement(
@@ -334,12 +334,11 @@ namespace MBChat2
         MBDB::IntType CurrentID = -1;
         for(int i = Parents.size()-1; i >= 0; i--)
         {
-            ReturnValue += "/";   
             GetChildStatement.Reset();
             GetChildStatement.BindValue("Name",Parents[i]);
             GetChildStatement.BindValue("ParentID",CurrentID);
             GetChildStatement.BindValue("DatabaseID",DBID);
-            ReturnValue += Parents[i];
+            ReturnValue.push_back( Parents[i]);
             {
                 auto Rows = DB->GetAllRows(GetChildStatement);
                 if(Rows.size() != 1)
@@ -364,7 +363,7 @@ namespace MBChat2
         OutParent = CurrentParent;
         return ReturnValue;
     }
-    std::string ConnectionManager::GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
+    std::vector<std::string> ConnectionManager::GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
     {
         return m_State->GetAbsoluteResourcePath(DB,Resource,OutParent,OutID);
     }

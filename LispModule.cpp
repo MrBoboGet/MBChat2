@@ -99,7 +99,7 @@ namespace MBChat2
         ReturnValue = std::get<std::string>(Row["Content"]);
         return ReturnValue;
     }
-    MBLisp::String GetPath(DBConnection& Connection,ResourceHandle const& Resource)
+    std::vector<std::string> GetPath(ResourceHandle const& Resource)
     {
         return Resource.Path;
     }
@@ -112,6 +112,18 @@ namespace MBChat2
         std::regex RegexPattern;
     };
 
+
+
+    std::vector<QueryPart> i_ConvertPath(std::vector<std::string> const& Path)
+    {
+        std::vector<QueryPart> ReturnValue;
+        for(auto const& Part : Path)
+        {
+            auto& QueryPart = ReturnValue.emplace_back();
+            QueryPart.Name = Part;
+        }
+        return ReturnValue;
+    }
     std::vector<QueryPart> i_ParseQueryParts(MBLisp::String const& Query)
     {
         std::vector<QueryPart> ReturnValue;
@@ -163,11 +175,11 @@ namespace MBChat2
                     InsertEscaped(RegexString,NewPart.Name,RegexParseOffset,NextSpecial);
                     if(NewPart.Name[NextSpecial] == '*')
                     {
-                        RegexString += ".*";
+                        RegexString += "[\\s\\S]*";
                     }
                     else if(NewPart.Name[NextSpecial] == '?')
                     {
-                        RegexString += ".";
+                        RegexString += "[\\s\\S]";
                     }
                     RegexParseOffset = NextSpecial+1;
                 }
@@ -203,7 +215,7 @@ namespace MBChat2
                             MBDB::SQLStatement& AllParent,
                             std::vector<QueryPart> const& Parts,
                             MBDB::IntType ParentInt,
-                            std::string& CurrentPath,
+                            std::vector<std::string>& CurrentPath,
                             size_t Offset, 
                             size_t RecursiveIndex = -1)
     {
@@ -231,15 +243,13 @@ namespace MBChat2
                         ResourceHandle NewHandle;
                         NewHandle.Id = std::move(NewHash);
                         NewHandle.Path = CurrentPath;
-                        NewHandle.Path += "/";
-                        NewHandle.Path += Name;
+                        NewHandle.Path.push_back(Name);
                         OutResult.emplace_back(MBLisp::Value::EmplaceExternal<ResourceHandle>(std::move(NewHandle)));
                     }
                     else
                     {
                         size_t PreviousPathSize = CurrentPath.size();
-                        CurrentPath += "/";
-                        CurrentPath += Name;
+                        CurrentPath.push_back(Name);
                         GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
                         CurrentPath.resize(PreviousPathSize);
                     }
@@ -263,15 +273,13 @@ namespace MBChat2
                     ResourceHandle NewHandle;
                     NewHandle.Id = std::move(NewId);
                     NewHandle.Path = CurrentPath;
-                    NewHandle.Path += "/";
-                    NewHandle.Path += Name;
+                    NewHandle.Path.push_back(Name);
                     OutResult.emplace_back(MBLisp::Value::EmplaceExternal<ResourceHandle>(std::move(NewHandle)));
                 }
                 else
                 {
                     size_t PreviousPathSize = CurrentPath.size();
-                    CurrentPath += "/";
-                    CurrentPath += Name;
+                    CurrentPath.push_back(Name);
                     GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
                     CurrentPath.resize(PreviousPathSize);
                 }
@@ -289,8 +297,7 @@ namespace MBChat2
                 auto Name = std::get<std::string>(Row["Name"]);
                 auto NewID = std::get<MBDB::IntType>(Row["ID"]);
                 size_t PreviousPathSize = CurrentPath.size();
-                CurrentPath += "/";
-                CurrentPath += Name;
+                CurrentPath.push_back(Name);
                 GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,RecursiveIndex,RecursiveIndex);
                 CurrentPath.resize(PreviousPathSize);
             }
@@ -307,7 +314,7 @@ namespace MBChat2
         MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID");
         MBDB::IntType ParentID = 0;
         MBDB::IntType OutID = 0;
-        std::string ParentPath =  Connection.GetAbsoluteResourcePath(ResourceRoot,ParentID,OutID);
+        std::vector<std::string> ParentPath =  Connection.GetAbsoluteResourcePath(ResourceRoot,ParentID,OutID);
         GetResource_ImplPrepared(*DB,OutResult,ExplicitName,AllParent,Parts,ParentID,ParentPath,Offset);
     }
 
@@ -351,17 +358,10 @@ namespace MBChat2
         GetResource_Impl(Connection,Result,QueryParts,Root.Id,0);
         return Result;
     }
-
-    void AddResource_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    void AddResource_Query(DBConnection& Connection,std::vector<QueryPart>& QueryParts,MBLisp::String const& Content)
     {
         ResourceContent NewContent;
         NewContent.Content = Content;
-        auto QueryParts = i_ParseQueryParts(Path);
-        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
-                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
-        {
-            throw std::runtime_error("Error adding resource: invalid path \""+Path+"\"");
-        }
         NewContent.Name = QueryParts.back().Name;
         ID Parent = Connection.GetDBID();
         if(QueryParts.size() > 0)
@@ -381,7 +381,27 @@ namespace MBChat2
         NewContent.ParentHash.Content = Parent;
         Connection.UploadResource(std::move(NewContent));
     }
-    void AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    void AddResource_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    {
+        auto QueryParts = i_ParseQueryParts(Path);
+        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
+                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
+        {
+            throw std::runtime_error("Error adding resource: invalid path \""+Path+"\"");
+        }
+        AddResource_Query(Connection,QueryParts,Content);
+    }
+    void AddResource_VectorPath(DBConnection& Connection,std::vector<std::string> const& Path,MBLisp::String const& Content)
+    {
+        auto QueryParts = i_ConvertPath(Path);
+        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
+                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
+        {
+            throw std::runtime_error("Error adding resource: invalid path");
+        }
+        AddResource_Query(Connection,QueryParts,Content);
+    }
+    std::vector<std::string> AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
     {
         ResourceContent NewContent;
         NewContent.Content = Content;
@@ -398,9 +418,12 @@ namespace MBChat2
         {
             throw std::runtime_error("Error adding resource to specific path: directory query returned "+std::to_string(Resources.size())+" elements");
         }
-        auto Parent = Resources[0].GetType<ResourceHandle>().Id;
-        NewContent.ParentHash.Content = Parent;
+        auto& Parent = Resources[0].GetType<ResourceHandle>();
+        NewContent.ParentHash.Content = Parent.Id;
         Connection.UploadResource(std::move(NewContent));
+        std::vector<std::string> ReturnValue = std::move(Parent.Path);
+        ReturnValue.push_back(MBCrypto::HashData(Content,MBCrypto::HashFunction::SHA256));
+        return ReturnValue;
     }
 
     void AddResource_Parent(DBConnection& Connection,ResourceHandle const& Parent,MBLisp::String const& Name,MBLisp::String const& Content)
@@ -552,6 +575,7 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<GetResources_Handle>(ReturnValue,"get-resources");
 
         AssociatedEvaluator.AddGeneric<AddResource_Path>(ReturnValue,"add-resource");
+        AssociatedEvaluator.AddGeneric<AddResource_VectorPath>(ReturnValue,"add-resource");
         AssociatedEvaluator.AddGeneric<AddResource_Parent>(ReturnValue,"add-resource");
 
         AssociatedEvaluator.AddGeneric<AddChild_Path>(ReturnValue,"add-child");

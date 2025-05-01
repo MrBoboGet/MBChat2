@@ -22,7 +22,7 @@ namespace MBChat2
         }
         m_ConnectionManager->PublishMessage(std::move(HeaderToPublish));
     }
-    std::string DBConnection::GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID)
+    std::vector<std::string> DBConnection::GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID)
     {
         return m_ConnectionManager->GetAbsoluteResourcePath(GetDBID(),ResourceRoot,ParentID,OutID);
     }
