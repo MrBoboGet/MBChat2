@@ -413,8 +413,9 @@ namespace MBChat2
                 } );
 
         m_Evaluator = MBLisp::Evaluator::CreateEvaluator();
-        m_Evaluator->AddInternalModule("mbchat",
-                std::make_unique<ChatLispModule>(shared_from_this()));
+        auto ChatModule = std::make_unique<ChatLispModule>(shared_from_this());
+        m_Evaluator->DumpInternalModule("mbchat",*ChatModule->GetModuleScope(*m_Evaluator));
+        m_Evaluator->AddInternalModule("mbchat",std::move(ChatModule));
         m_Evaluator->LoadStd();
 
 
