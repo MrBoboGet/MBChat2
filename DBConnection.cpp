@@ -22,6 +22,14 @@ namespace MBChat2
         }
         m_ConnectionManager->PublishMessage(std::move(HeaderToPublish));
     }
+    void DBConnection::RemoveResource(ID const& ResourceID)
+    {
+        m_ConnectionManager->RemoveResource(m_DatabaseID,ResourceID);
+    }
+    void DBConnection::RemoveResource(std::vector<std::string> const& Path)
+    {
+        m_ConnectionManager->RemoveResource(m_DatabaseID,Path);
+    }
     std::vector<std::string> DBConnection::GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID)
     {
         return m_ConnectionManager->GetAbsoluteResourcePath(GetDBID(),ResourceRoot,ParentID,OutID);

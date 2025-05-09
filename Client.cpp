@@ -72,7 +72,6 @@ namespace MBChat2
     {
         if(NewInput.IsType<MBCLI::ResizeEvent>())
         {
-            m_Terminal.Clear();
             auto const& ResizeEvent = NewInput.GetType<MBCLI::ResizeEvent>();
         }
         else if(NewInput.IsType<MBCLI::ConsoleInput>())
@@ -588,7 +587,6 @@ namespace MBChat2
             auto LayerUpdated = m_TopLayerer.Updated();
             m_Terminal.WriteWindow(m_TopLayerer);
         }
-
         return ReturnValue;
     }
 }

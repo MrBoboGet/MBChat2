@@ -434,6 +434,15 @@ namespace MBChat2
         NewContent.Name = Name;
         Connection.UploadResource(std::move(NewContent));
     }
+    static void RemoveResource_Path(DBConnection& Connection,std::vector<std::string> const& Path)
+    {
+        Connection.RemoveResource(Path);
+    }
+    static void RemoveResource_Resource(DBConnection& Connection,ResourceHandle const& Resource)
+    {
+        Connection.RemoveResource(Resource.Id);
+    }
+
 
     //MBLisp::List EditResource(DBConnection& Connection,ResourceHandle const& New)
     //{
@@ -577,6 +586,10 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<AddResource_Path>(ReturnValue,"add-resource");
         AssociatedEvaluator.AddGeneric<AddResource_VectorPath>(ReturnValue,"add-resource");
         AssociatedEvaluator.AddGeneric<AddResource_Parent>(ReturnValue,"add-resource");
+
+        AssociatedEvaluator.AddGeneric<RemoveResource_Resource>(ReturnValue,"remove-resource");
+        AssociatedEvaluator.AddGeneric<RemoveResource_Path>(ReturnValue,"remove-resource");
+
 
         AssociatedEvaluator.AddGeneric<AddChild_Path>(ReturnValue,"add-child");
 

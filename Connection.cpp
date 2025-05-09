@@ -300,6 +300,42 @@ namespace MBChat2
         }
     }
     //
+    void ConnectionManager::SharedState::GetPathID(ID const& DBID,std::vector<std::string> const& Path,MBDB::IntType& OutParent,MBDB::IntType& OutID)
+    {
+        auto DB = &this->DB;
+        auto GetChildStatement = DB->GetSQLStatement(
+                "SELECT ID,ParentID FROM ActiveTree WHERE Name = :Name AND ParentID = :ParentID AND DatabaseID = :DatabaseID");
+        MBDB::IntType CurrentParent = -1;
+        MBDB::IntType CurrentID = -1;
+        for(int i = Path.size()-1; i >= 0; i--)
+        {
+            GetChildStatement.Reset();
+            GetChildStatement.BindValue("Name",Path[i]);
+            GetChildStatement.BindValue("ParentID",CurrentID);
+            GetChildStatement.BindValue("DatabaseID",DBID);
+            {
+                auto Rows = DB->GetAllRows(GetChildStatement);
+                if(Rows.size() != 1)
+                {
+                    if(Rows.size() == 0 && i == 0)
+                    {
+                        CurrentParent = CurrentID;
+                        CurrentID = -1;
+                        break;   
+                    }
+                    throw std::runtime_error(
+                            "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
+                            std::to_string(Rows.size()));
+
+                }
+                CurrentParent = std::get<MBDB::IntType>(Rows[0]["ParentID"]);
+                CurrentID = std::get<MBDB::IntType>(Rows[0]["ID"]);
+            }
+
+        }
+        OutID = CurrentID;
+        OutParent = CurrentParent;
+    }
     std::vector<std::string> ConnectionManager::SharedState::GetAbsoluteResourcePath
         (ID const& DBID,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
     {
@@ -328,39 +364,7 @@ namespace MBChat2
             Parents.push_back(std::get<std::string>(ResourceRow["Name"]));
             CurrentResource = StringToID(std::get<std::string>(ResourceRow["ParentHash"]));
         }
-        auto GetChildStatement = DB->GetSQLStatement(
-                "SELECT ID,ParentID FROM ActiveTree WHERE Name = :Name AND ParentID = :ParentID AND DatabaseID = :DatabaseID");
-        MBDB::IntType CurrentParent = -1;
-        MBDB::IntType CurrentID = -1;
-        for(int i = Parents.size()-1; i >= 0; i--)
-        {
-            GetChildStatement.Reset();
-            GetChildStatement.BindValue("Name",Parents[i]);
-            GetChildStatement.BindValue("ParentID",CurrentID);
-            GetChildStatement.BindValue("DatabaseID",DBID);
-            ReturnValue.push_back( Parents[i]);
-            {
-                auto Rows = DB->GetAllRows(GetChildStatement);
-                if(Rows.size() != 1)
-                {
-                    if(Rows.size() == 0 && i == 0)
-                    {
-                        CurrentParent = CurrentID;
-                        CurrentID = -1;
-                        break;   
-                    }
-                    throw std::runtime_error(
-                            "Database invariant broken when getting absolute path for resource: Amount of children for specified path is "+
-                            std::to_string(Rows.size()));
-
-                }
-                CurrentParent = std::get<MBDB::IntType>(Rows[0]["ParentID"]);
-                CurrentID = std::get<MBDB::IntType>(Rows[0]["ID"]);
-            }
-
-        }
-        OutID = CurrentID;
-        OutParent = CurrentParent;
+        GetPathID(DBID,Parents,OutParent,OutID);
         return ReturnValue;
     }
     std::vector<std::string> ConnectionManager::GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
@@ -487,6 +491,14 @@ namespace MBChat2
                 m_State->UDP->SendNotification(Peer,NotificationToSend);
             }
         }
+    }
+    void ConnectionManager::RemoveResource(ID const& DBID,ID const& ResourceID)
+    {
+        m_State->RemoveResource(DBID,ResourceID);
+    }
+    void ConnectionManager::RemoveResource(ID const& DBID,std::vector<std::string> const& Path)
+    {
+        m_State->RemoveResource(DBID,Path);
     }
     MBUtility::Future<MBParsing::JSONObject> ConnectionManager::SendPeerRPC(ID const& PeerID,
             MBParsing::JSONObject ObjectToSend)
@@ -860,6 +872,36 @@ namespace MBChat2
             DB.GetAllRows(InsertStatement);
         }
     }
+    void ConnectionManager::SharedState::RemoveResource(ID const& DBID,ID const& ResourceID)
+    {
+        MBDB::IntType ParentID = -1;
+        MBDB::IntType RowID = -1;
+        auto Path = GetAbsoluteResourcePath(DBID,ResourceID,ParentID,RowID);
+        if(RowID != -1)
+        {
+            auto InsertStatement = DB.GetSQLStatement(
+                    " DELETE FROM ActiveTree WHERE ID = :ID ");
+            InsertStatement.BindValue("ID",RowID);
+            DB.GetAllRows(InsertStatement);
+        }
+    }
+    void ConnectionManager::SharedState::RemoveResource(ID const& DBID,std::vector<std::string> const& Path)
+    {
+        MBDB::IntType ParentID = -1;
+        MBDB::IntType RowID = -1;
+        std::vector<std::string> Reversed;
+        Reversed.insert(Reversed.end(),Path.rbegin(),Path.rend());
+        GetPathID(DBID,Reversed,ParentID,RowID);
+        if(RowID != -1)
+        {
+            auto InsertStatement = DB.GetSQLStatement(
+                    " DELETE FROM ActiveTree WHERE ID = :ID ");
+            InsertStatement.BindValue("ID",RowID);
+            DB.GetAllRows(InsertStatement);
+        }
+    }
+
+
     bool ConnectionManager::SharedState::ResourceInDB(Hash const& Resource)
     {
         bool ReturnValue = true;
