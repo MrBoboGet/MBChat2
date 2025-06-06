@@ -585,7 +585,14 @@ namespace MBChat2
             auto VisualiserUpdated = m_DBVisualiserWindow->Updated();
             auto TopUpdated = m_TopWindow.Updated();
             auto LayerUpdated = m_TopLayerer.Updated();
-            m_Terminal.WriteWindow(m_TopLayerer);
+            try
+            {
+                m_Terminal.WriteWindow(m_TopLayerer);
+            }
+            catch(std::exception const& e)
+            {
+                std::cout<<e.what()<<std::endl;
+            }
         }
         return ReturnValue;
     }

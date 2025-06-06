@@ -455,7 +455,7 @@ namespace MBChat2
     //{
     //       
     //}
-    void ConnectionManager::PublishMessage(PublishableResourceHeader PublishedMessage)
+    ID ConnectionManager::PublishMessage(PublishableResourceHeader PublishedMessage)
     {
         NewMessage NotificationToSend;
         NotificationToSend.Header.Type = PublishedMessage.Type;
@@ -491,6 +491,7 @@ namespace MBChat2
                 m_State->UDP->SendNotification(Peer,NotificationToSend);
             }
         }
+        return NotificationToSend.Header.HeaderHash.Content;
     }
     void ConnectionManager::RemoveResource(ID const& DBID,ID const& ResourceID)
     {
@@ -499,6 +500,10 @@ namespace MBChat2
     void ConnectionManager::RemoveResource(ID const& DBID,std::vector<std::string> const& Path)
     {
         m_State->RemoveResource(DBID,Path);
+    }
+    bool ConnectionManager::GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader)
+    {
+        return m_State->GetResourceById(DBID,ResourceID,OutHeader);
     }
     MBUtility::Future<MBParsing::JSONObject> ConnectionManager::SendPeerRPC(ID const& PeerID,
             MBParsing::JSONObject ObjectToSend)
@@ -947,6 +952,37 @@ namespace MBChat2
         {
             AddSubscription(Subscription.Content,Peer);
         }
+    }
+    bool ConnectionManager::SharedState::GetResourceById(ID const& DatabaseID,ID const& ResourceID,ResourceHeader& OutHeader)
+    {
+        bool Result = false;
+        auto Stmt = DB.GetSQLStatement("SELECT Name,ContentType,UpType,Time,ContentSize,ParentHash,ContentHash,UploaderID,Signature FROM Resources WHERE DatabaseHash = :DBHash AND Hash = :ID");
+        Stmt.BindBlob("DBHash",DatabaseID);
+        Stmt.BindBlob("ID",ResourceID);
+        auto Rows = DB.GetAllRows(Stmt);
+        if(Rows.size() > 1)
+        {
+            throw std::runtime_error("Database invariant broken: multiple rows with the same hash and database ID");
+        }
+        for(auto const& Row : Rows)
+        {
+            OutHeader.HeaderHash = ResourceID;
+            OutHeader.Type = ContentType(std::get<MBDB::IntType>(Row["ContentType"]));
+            OutHeader.UpType = UploadType(std::get<MBDB::IntType>(Row["UpType"]));
+            OutHeader.TimeStamp = std::get<MBDB::IntType>(Row["Time"]);
+            OutHeader.ContentSize = std::get<MBDB::IntType>(Row["ContentSize"]);
+            OutHeader.OriginalDatabaseHash = DatabaseID;
+            OutHeader.ParentHash.Content = StringToID(std::get<std::string>(Row["ParentHash"]));
+            OutHeader.Name = std::get<std::string>(Row["Name"]);
+            OutHeader.ContentHash.Content = StringToID(std::get<std::string>(Row["ContentHash"]));
+            OutHeader.Uploader.Content = StringToID(std::get<std::string>(Row["UploaderID"]));
+            OutHeader.Sig.Content = std::get<std::string>(Row["Signature"]);
+
+
+            Result = true;
+            break;
+        }
+        return Result;
     }
     void ConnectionManager::SharedState::AddJoinDBTask(ID const& DBID)
     {

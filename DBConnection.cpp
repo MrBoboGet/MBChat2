@@ -2,7 +2,7 @@
 
 namespace MBChat2
 {
-    void DBConnection::UploadResource(ResourceContent NewResource)
+    ID DBConnection::UploadResource(ResourceContent NewResource)
     {
         PublishableResourceHeader HeaderToPublish;
         HeaderToPublish.ContentHash = StringToID(MBCrypto::HashData(NewResource.Content,MBCrypto::HashFunction::SHA256));
@@ -13,14 +13,14 @@ namespace MBChat2
         HeaderToPublish.Name = NewResource.Name;
         if(HeaderToPublish.Name.empty())
         {
-            HeaderToPublish.Name = IDToString(HeaderToPublish.ContentHash.Content);
+            HeaderToPublish.Name = MBCrypto::HashData(NewResource.Content+std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()) ,MBCrypto::HashFunction::SHA256);
         }
         HeaderToPublish.DatabaseHash = m_DatabaseID;
         if(HeaderToPublish.ParentHash.Content.size() == 0)
         {
             HeaderToPublish.ParentHash = LatestID();   
         }
-        m_ConnectionManager->PublishMessage(std::move(HeaderToPublish));
+        return m_ConnectionManager->PublishMessage(std::move(HeaderToPublish));
     }
     void DBConnection::RemoveResource(ID const& ResourceID)
     {
@@ -29,6 +29,10 @@ namespace MBChat2
     void DBConnection::RemoveResource(std::vector<std::string> const& Path)
     {
         m_ConnectionManager->RemoveResource(m_DatabaseID,Path);
+    }
+    bool DBConnection::GetResourceByID(ID const& ID,ResourceHeader& OutResource)
+    {
+        return m_ConnectionManager->GetResource(m_DatabaseID,ID,OutResource);
     }
     std::vector<std::string> DBConnection::GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID)
     {

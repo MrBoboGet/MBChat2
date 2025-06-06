@@ -330,6 +330,26 @@ namespace MBChat2
         }
         return Result[0];
     }
+    MBLisp::Value GetResourceById(DBConnection& Connection,MBLisp::String const& ID)
+    {
+        ResourceHeader Header;
+        if(!Connection.GetResourceByID(StringToID(ID),Header))
+        {
+            return MBLisp::Value();
+        }
+        MBDB::IntType ParentID;
+        MBDB::IntType PathID;
+        auto Path = Connection.GetAbsoluteResourcePath(Header.HeaderHash.Content,ParentID,PathID);
+        ResourceHandle NewHandle;
+        NewHandle.Id = StringToID(ID);
+        NewHandle.Path = std::move(Path);
+        return MBLisp::Value::EmplaceExternal<ResourceHandle>(std::move(NewHandle));
+    }
+    MBLisp::String GetResourceID(ResourceHandle const& Handle)
+    {
+        return IDToString(Handle.Id);
+    }
+
 
     MBLisp::List GetResources(DBConnection& Connection,MBLisp::String const& Query)
     {
@@ -401,7 +421,7 @@ namespace MBChat2
         }
         AddResource_Query(Connection,QueryParts,Content);
     }
-    std::vector<std::string> AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
+    ResourceHandle AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
     {
         ResourceContent NewContent;
         NewContent.Content = Content;
@@ -420,10 +440,13 @@ namespace MBChat2
         }
         auto& Parent = Resources[0].GetType<ResourceHandle>();
         NewContent.ParentHash.Content = Parent.Id;
-        Connection.UploadResource(std::move(NewContent));
-        std::vector<std::string> ReturnValue = std::move(Parent.Path);
-        ReturnValue.push_back(MBCrypto::HashData(Content,MBCrypto::HashFunction::SHA256));
-        return ReturnValue;
+        auto ID = Connection.UploadResource(std::move(NewContent));
+        std::vector<std::string> ResourcePath = std::move(Parent.Path);
+        ResourcePath.push_back(MBCrypto::HashData(Content,MBCrypto::HashFunction::SHA256));
+        ResourceHandle Ret;
+        Ret.Path = std::move(ResourcePath);
+        Ret.Id = ID;
+        return Ret;
     }
 
     void AddResource_Parent(DBConnection& Connection,ResourceHandle const& Parent,MBLisp::String const& Name,MBLisp::String const& Content)
@@ -580,6 +603,8 @@ namespace MBChat2
 
         AssociatedEvaluator.AddGeneric<GetResource>(ReturnValue,"get-resource");
         AssociatedEvaluator.AddGeneric<GetResource_Handle>(ReturnValue,"get-resource");
+        AssociatedEvaluator.AddGeneric<GetResourceById>(ReturnValue,"get-resource-by-id");
+        AssociatedEvaluator.AddGeneric<GetResourceID>(ReturnValue,"get-resource-id");
         AssociatedEvaluator.AddGeneric<GetResources>(ReturnValue,"get-resources");
         AssociatedEvaluator.AddGeneric<GetResources_Handle>(ReturnValue,"get-resources");
 

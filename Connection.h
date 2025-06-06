@@ -413,6 +413,7 @@ namespace MBChat2
             bool ResourceInDB(Hash const& Resource);
             bool SubscribedToDB(Hash const& DBID);
             void AddPeerSubscriptions(PeerInfo const& Peer,std::vector<Hash> const& Subscriptions);
+            bool GetResourceById(ID const& DatabaseID,ID const& ResourceID,ResourceHeader& OutHeader);
 
             void AddSubscription(ID const& DatabaseID,PeerInfo const& PeerInfo);
             //
@@ -721,9 +722,10 @@ namespace MBChat2
         std::vector<std::string> GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID);
         void AddConnections(std::vector<PeerInfo> const& Peers);
         void AddConnection(PeerInfo Peer);
-        void PublishMessage(PublishableResourceHeader Message);
+        ID PublishMessage(PublishableResourceHeader Message);
         void RemoveResource(ID const& DBID,ID const& ResourceID);
         void RemoveResource(ID const& DBID,std::vector<std::string> const& Path);
+        bool GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader);
         //
 
         MBUtility::Future<MBParsing::JSONObject> SendPeerRPC(ID const& PeerID,
