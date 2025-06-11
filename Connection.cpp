@@ -145,6 +145,22 @@ namespace MBChat2
         NewMessage.ResponseCallback = std::move(Callback);
         m_SharedState->SendConditional.notify_one();
     }
+    MBUtility::Future<std::optional<std::pair<PeerInfo,Message>>> Connection::SendMessage(Message MessageToSend)
+    {
+        MBUtility::Promise<std::optional<std::pair<PeerInfo,Message>>> Promise;
+        auto ReturnValue = Promise.GetFuture();
+
+        std::lock_guard Lock(m_SharedState->SendMutex);
+        QueuedMessage& NewMessage = m_SharedState->QueuedMessages.emplace_back();
+        NewMessage.MessageToSend = std::move(MessageToSend);
+        NewMessage.ResponseCallback = MessageCallback([Promise=std::move(Promise)](PeerInfo const& Peer, Message const& NewMessage) mutable
+        {
+            Promise.SetValue( std::optional(std::pair<PeerInfo,Message>(Peer,std::move(NewMessage))));
+        });
+        m_SharedState->SendConditional.notify_one();
+
+        return ReturnValue;
+    }
     uint16_t Connection::GetLocalPort()
     {
         return m_Params.LocalPort;
@@ -505,81 +521,69 @@ namespace MBChat2
     {
         return m_State->GetResourceById(DBID,ResourceID,OutHeader);
     }
-    MBUtility::Future<MBParsing::JSONObject> ConnectionManager::SendPeerRPC(ID const& PeerID,
-            MBParsing::JSONObject ObjectToSend)
+
+
+
+    Task<std::optional<MBParsing::JSONObject>> 
+        ConnectionManager::SendPeerRPC(ID const& PeerID, MBParsing::JSONObject ObjectToSend)
     {
-        std::shared_ptr<MBUtility::Promise<MBParsing::JSONObject>> Promise = 
-            std::make_shared<MBUtility::Promise<MBParsing::JSONObject>>();
-        auto ReturnValue = Promise->GetFuture();
+        std::optional<MBParsing::JSONObject> ReturnValue;
         Message NewMessage;
         JSONRPC& RPCMessage = NewMessage.Content.GetOrAssign<JSONRPC>();
         NewMessage.Header.Type = MessageType::JSONRPC;
         RPCMessage.Object = std::move(ObjectToSend);
 
-        std::lock_guard Lock(m_State->StateMutex);
-        auto It = m_State->ActiveConnections.find(PeerID);
-
-        MessageCallback Callback = 
-                    [Promise = Promise](PeerInfo const& Info,Message const& Response) mutable
-                    {
-                        if(Response.Content.IsType<JSONRPC>())
-                        {
-                            Promise->SetValue(Response.Content.GetType<JSONRPC>().Object);
-                        }
-                        else
-                        {
-                            Promise->SetInvalid();
-                        }
-                    };
-        if(It != m_State->ActiveConnections.end())
+        std::shared_ptr<Connection> PeerConnection = nullptr;
+        
         {
-            It->second->SendMessage(NewMessage,std::move(Callback));
-        }
-        else
-        {
-            auto ClosestPeer = m_State->Peers.FindClosest(PeerID,1);
-            if(ClosestPeer.size() > 0 && ClosestPeer[0].ID.Content == PeerID)
+            std::lock_guard Lock(m_State->StateMutex);
+            auto It = m_State->ActiveConnections.find(PeerID);
+            if(It != m_State->ActiveConnections.end())
             {
-                m_State->AddTask<InitializeConnection>(ClosestPeer[0],m_State->HostInfo,
-                        [State=m_State,Message = std::move(NewMessage),MessageCallback=std::move(Callback),Promise=Promise]
-                        (std::shared_ptr<Connection> NewConnection) mutable
-                        {
-                            NewConnection->SendMessage(Message,std::move(MessageCallback));
-                        },
-                        [State=m_State,Promise=Promise](PeerInfo const& Info)
-                        {
-                            Promise->SetInvalid();
-                        }
-                        );
-            }
-            else if(ClosestPeer.size() > 0)
-            {
-                m_State->AddTask<FindClosestPeers>(ClosestPeer[0].ID.Content,
-                        [State=m_State,ID = PeerID,Message = std::move(NewMessage),MessageCallback=std::move(Callback),Promise=Promise]
-                        (std::vector<PeerInfo> const&  ClosestPeers) mutable
-                        {
-                            if(ClosestPeers.size() > 0 && ClosestPeers[0].ID.Content == ID)
-                            {
-                                State->AddTask<InitializeConnection>(ClosestPeers[0],State->HostInfo,
-                                        [State=State,Message = std::move(Message),MessageCallback=std::move(MessageCallback),Promise=Promise]
-                                        (std::shared_ptr<Connection> NewConnection) mutable
-                                        {
-                                        NewConnection->SendMessage(Message,std::move(MessageCallback));
-                                        },
-                                        [State=State,Promise=Promise](PeerInfo const& Info)
-                                        {
-                                        Promise->SetInvalid();
-                                        }
-                                        );
-                            }
-                            else
-                            {
-                                Promise->SetInvalid();
-                            }
-                        });
+                PeerConnection = It->second;
             }
         }
-        return ReturnValue;
+        if(PeerConnection == nullptr)
+        {
+            PeerInfo TargetPeer;
+            auto ClosestPeers = m_State->Peers.FindClosest(PeerID,1);
+            if(ClosestPeers.size() == 0)
+            {
+                co_return ReturnValue;
+            }
+            if(ClosestPeers[0].ID.Content == PeerID)
+            {
+                TargetPeer = std::move(ClosestPeers[0]);
+            }
+            else
+            {
+                auto NewPeers = co_await GetClosestPeers(ClosestPeers[0].ID.Content);
+                if(NewPeers.size() > 0 && NewPeers[0].ID.Content == PeerID)
+                {
+                    TargetPeer = NewPeers[0];
+                }
+            }
+            if(TargetPeer.ID != PeerID)
+            {
+                co_return ReturnValue;
+            }
+            auto ConnectionResult = co_await InitializeConnection(TargetPeer,m_State->HostInfo);
+            if(!ConnectionResult.has_value())
+            {
+                co_return ReturnValue;
+            }
+            PeerConnection = ConnectionResult.value();
+        }
+        if(PeerConnection != nullptr)
+        {
+            //ReturnValue = (co_await PeerConnection->SendMessage(NewMessage)).second.Content.GetType<JSONRPC>().Object;
+            auto Response = (co_await PeerConnection->SendMessage(NewMessage));
+            if(Response)
+            {
+                ReturnValue = std::move(Response.value().second.Content.GetType<JSONRPC>().Object);
+            }
+        }
+        co_return ReturnValue;
     }
     void ConnectionManager::JoinNetwork()
     {
@@ -587,11 +591,14 @@ namespace MBChat2
         Request.HostPeer = m_State->HostInfo;
         Request.PeerID  = m_State->HostInfo.ID;
         Request.k = 20;
-        m_State->AddTask<FindClosestPeers>(std::move(Request),[](auto const&){});
+        GetClosestPeers(std::move(Request)).resume();
+        //m_State->AddTask<FindClosestPeers>(std::move(Request),[](auto const&){});
     }
     void ConnectionManager::JoinDB(ID const& DBID)
     {
-        m_State->AddJoinDBTask(DBID);
+        //m_State->AddJoinDBTask(DBID);
+        auto Task = JoinDBTask(DBID);
+        Task.resume();
     }
 
     std::vector<PeerInfo> ConnectionManager::SharedState::GetClosestPeers(ID const& ID,int k)
@@ -984,20 +991,6 @@ namespace MBChat2
         }
         return Result;
     }
-    void ConnectionManager::SharedState::AddJoinDBTask(ID const& DBID)
-    {
-        FindPeerRequest Request;
-        Request.HostPeer = HostInfo;
-        Request.PeerID  = HostInfo.ID;
-        Request.k = 20;
-        Request.DBID = Hash();
-        Request.DBID.Value().Content = DBID;
-        {
-            AddSubscription(DBID,HostInfo);
-        }
-        AddTask<FindClosestPeers>(std::move(Request),DBID,
-                [State=shared_from_this(),ID=DBID](std::vector<PeerInfo> const& Peers){ State->AddTask<SyncDBTask>(Peers,ID); });
-    }
     MessageCallback ConnectionManager::SharedState::GetTCPMessageHandler()
     {
         return [State=shared_from_this()](PeerInfo const& Peer,Message const& Message)
@@ -1261,36 +1254,4 @@ namespace MBChat2
         m_State->NewMappingConditional.notify_one();
         return true;
     }
-    
-    //
-    
-    //std::vector<PeerInfo> ConnectionManager::SharedState::FindDBPeers(ID const&,int k)
-    //{
-    //    std::vector<PeerInfo> ReturnValue;
-
-
-    //    return ReturnValue;
-    //}
-    //void ConnectionManager::SharedState::PopulatePeersForDB(ID const& Database)
-    //{
-    //    auto DBPeers = FindDBPeers(Database,20);
-    //    DBSubscriber Notification;
-    //    {
-    //        std::lock_guard InternalsLock(StateMutex);
-    //        for(auto const& Peer : DBPeers)
-    //        {
-    //            Peers.AddPeer(Peer);
-    //        }
-    //        Notification.Peer = HostInfo;
-    //        for(auto const& DB : Subscriptions)
-    //        {
-    //            Notification.SubscribedDatabases.push_back(DB.DatabaseID);
-    //        }
-    //    }
-    //    //advertise existence, and display subscriptions
-    //    for(auto const& Peer : DBPeers)
-    //    {
-    //        UDP.SendNotification(Peer,Notification);
-    //    }
-    //}
 }

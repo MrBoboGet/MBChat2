@@ -302,30 +302,33 @@ namespace MBChat2
     void Client::p_StartChat(ID const& PeerID)
     {
         MBParsing::JSONObject Obj;
-        auto RPCPromise = m_ConnectionManager->SendPeerRPC(
-                PeerID,std::map<std::string,MBParsing::JSONObject>({ {"method","startChat"}}));
-        RPCPromise.OnError( [&]()
+        auto StartChatRoutine = [](Client& Client,ID PeerID) -> Task<bool>
+        {
+            auto Response = co_await Client.m_ConnectionManager->SendPeerRPC(PeerID,std::map<std::string,MBParsing::JSONObject>({ {"method","startChat"}}));
+            if(!Response.has_value())
+            {
+               Client.p_DisplayError("Error connecting to peer");
+               co_return false;
+            }
+            try
+            {
+                auto NewDB = p_CreateChatDB(PeerID,Client.m_LocalID);
+                Client.m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
+                Client.m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                if(!Client.m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
                 {
-                    p_DisplayError("Error connecting to peer");
-                });
-        RPCPromise.Then( [&,PeerID=PeerID](MBParsing::JSONObject const& Response)
-                {
-                    try
-                    {
-                        auto NewDB = p_CreateChatDB(PeerID,m_LocalID);
-                        m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
-                        m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
-                        if(!m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
-                        {
-                            m_ConnectionManager->CreateDB(NewDB);
-                        }
-                        p_AddVisualiser(NewDB);
-                    }
-                    catch(std::exception const& e)
-                    {
-                        //std::cout<<e.what()<<std::endl;
-                    }
-                });
+                    Client.m_ConnectionManager->CreateDB(NewDB);
+                }
+                Client.p_AddVisualiser(NewDB);
+            }
+            catch(std::exception const& e)
+            {
+                Client.p_DisplayError(e.what());
+            }
+            co_return true;
+        };
+        auto Task = StartChatRoutine(*this,PeerID);
+        Task.resume();
     }
     void Client::p_DisplayError(std::string const& ErrorMessage)
     {

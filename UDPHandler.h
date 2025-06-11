@@ -15,6 +15,10 @@
 #include <MBUtility/TemplateUtilities.h>
 
 #include "OverlayProtocol.h"
+
+#include <coroutine>
+
+
 namespace MBChat2
 {
 
@@ -270,13 +274,62 @@ namespace MBChat2
         ParseVariant(Stream,Value,Type,MBUtility::TypeList<Args...>());
     }
 
+    template<typename T>
+    class UDPTaskQueue;
+
     typedef std::function<void (MessageLocation,UDPNotification const&)> UDPNotificationHandler;
     typedef std::function<UDPResponse (MessageLocation PeerLocation,UDPRequest const&)> UDPRequestHandler;
     class UDPHandler
     {
+        template<typename T>
+        friend class UDPTaskQueue;
+
         std::thread m_ListenThread;
 
         std::mutex m_StateMutex;
+        template<typename T>
+        class UDPTask
+        {
+            friend UDPHandler;
+            template<typename V>
+            friend class UDPTaskQueue;
+            uint32_t m_ID = 0;
+            struct SharedState
+            {
+                std::mutex StateMutex;
+                std::atomic<bool> Done{false};
+                //std::optional<T> Result;
+                MBUtility::Future<std::optional<T>> Result;
+                std::coroutine_handle<> Continuation;
+            };
+            UDPHandler& m_AssociatedHandler;
+            std::shared_ptr<SharedState> m_SharedState = std::make_shared<SharedState>();
+
+            UDPTask(UDPHandler& Handler) : m_AssociatedHandler(Handler)
+            {
+                   
+            }
+        public:
+            bool await_ready()
+            {
+                return m_SharedState->Done.load();
+            }
+            bool await_suspend(std::coroutine_handle<> Handle)
+            {
+                std::lock_guard Lock(m_SharedState->StateMutex);
+                if(m_SharedState->Done.load())
+                {
+                    return false;
+                }
+                m_SharedState->Continuation = Handle;
+                return true;
+            }
+            std::optional<T> await_resume()
+            {
+                std::lock_guard Lock(m_SharedState->StateMutex);
+                return std::move(m_SharedState->Result.Get());
+            }
+        };
 
         struct StoredMessage
         {
@@ -304,6 +357,8 @@ namespace MBChat2
             MBUtility::MOFunction<void (UDPResponse const& Response)> Callback;
         };
 
+        MBUtility::ThreadPool m_RequestResponseRunner = MBUtility::ThreadPool(5);
+
         std::vector<StoredMessage> m_SentMessages;
         std::atomic<bool> m_Stopping = false;
         std::atomic<uint32_t> m_NextMessageID;
@@ -324,7 +379,8 @@ namespace MBChat2
         UDPHandler();
         
         template<typename MessageType>
-        std::enable_if_t<std::is_base_of_v<UDPNotification_,MessageType>> SendNotification(PeerInfo Peer,MessageType Message,float Timeout = 5)
+        std::enable_if_t<std::is_base_of_v<UDPNotification_,MessageType>> 
+            SendNotification(PeerInfo Peer,MessageType Message,float Timeout = 5)
         {
             StoredMessage NewMessage;
             NewMessage.ID = m_NextMessageID.fetch_add(1);
@@ -342,7 +398,8 @@ namespace MBChat2
             m_SentMessages.push_back(std::move(NewMessage));
         }
         template<typename MessageType>
-        std::enable_if_t<std::is_base_of_v<UDPRequest_,MessageType>,MBUtility::Future<typename MessageType::ResponseType>> SendRequest(PeerInfo const& Peer,MessageType Message,float Timeout=5)
+        std::enable_if_t<std::is_base_of_v<UDPRequest_,MessageType>,UDPTask<typename MessageType::ResponseType>> 
+            SendRequest(PeerInfo const& Peer,MessageType Message,float Timeout=5)
         {
             typedef typename MessageType::ResponseType ResponseType;
             StoredMessage NewMessage;
@@ -354,27 +411,132 @@ namespace MBChat2
             Parse(OutStream,Message);
             NewMessage.IP = Peer.IP;
             NewMessage.Port = Peer.ListeningPort;
-            MBUtility::Promise<ResponseType> Promise;
-            MBUtility::Future<ResponseType> ReturnValue = Promise.GetFuture();
+            UDPTask<ResponseType> Result(*this);
+            Result.m_ID = NewMessage.ID;
             {
                 std::lock_guard Lock(m_StateMutex);
-                m_ResponseCallbacks[Peer.IP][NewMessage.ID].Callback = [Promise=std::move(Promise)] (UDPResponse const& Response) mutable{
-                    if(!Response.IsType<ResponseType>())
-                    {
-                        Promise.SetInvalid();
-                    }
-                    else
-                    {
-                        Promise.SetValue(std::move(Response.GetType<ResponseType>()));
-                    }
+                auto Promise = MBUtility::Promise<std::optional<ResponseType>>();
+                Result.m_SharedState->Result = Promise.GetFuture();
+                m_ResponseCallbacks[Peer.IP][NewMessage.ID].Callback =
+                    [this,ResultState = Result.m_SharedState,Promise=std::move(Promise)] (UDPResponse const& Response) mutable
+                {
+                    m_RequestResponseRunner.AddTask([Response=std::move(Response),Promise=std::move(Promise),ResultState=std::move(ResultState)]() mutable
+                            {
+                                std::coroutine_handle<> Handle;
+                                {
+                                    std::lock_guard Lock(ResultState->StateMutex);
+                                    ResultState->Done.store(true);
+                                    if(Response.IsType<ResponseType>())
+                                    {
+                                        Promise.SetValue(std::move(Response.GetType<ResponseType>()));
+                                    }
+                                    else
+                                    {
+                                        Promise.SetValue(std::optional<ResponseType>());
+                                    }
+                                    Handle = ResultState->Continuation;
+                                }
+                                if(Handle)
+                                {
+                                    Handle.resume();
+                                }
+                            });
+                    
                 };
                 p_SendMessage(NewMessage);
                 m_SentMessages.push_back(std::move(NewMessage));
                    
             }
-            return ReturnValue;
+            return Result;
         }
         void SetNotificationHandler(UDPNotificationHandler Handler);
         void SetRequestHandler(UDPRequestHandler Handler);
+    };
+    template<typename T>
+    class UDPTaskQueue
+    {
+        typedef UDPHandler::UDPTask<T> TaskType;
+        
+        std::mutex m_InternalsMutex;
+        std::atomic<int> m_Size{0};
+        std::atomic<int> m_FinishedCount{0};
+        std::unordered_map<uint32_t,TaskType> m_StoredTasks;
+        std::vector<uint32_t> m_FinishedTasks;
+        std::coroutine_handle<> m_Continuation;
+
+
+
+    public:
+        size_t size() const
+        {
+            return m_Size.load();
+        }
+        void AddTask(TaskType NewTask)
+        {
+            m_Size.fetch_add(1);
+            NewTask.m_SharedState->Result.Then([&Handler=NewTask.m_AssociatedHandler,this,Id = NewTask.m_ID](auto const& obj)
+                    {
+                        std::lock_guard Lock(m_InternalsMutex);
+                        m_FinishedTasks.push_back(Id);
+                        m_FinishedCount.fetch_add(1);
+                        if(m_Continuation)
+                        {
+                            Handler.m_RequestResponseRunner.AddTask([Continuation=m_Continuation]()
+                                    {
+                                        Continuation.resume();
+                                    });
+                            m_Continuation = std::coroutine_handle<>();
+                        }
+                    });
+            std::lock_guard Lock(m_InternalsMutex);
+            auto ID = NewTask.m_ID;
+            //m_StoredTasks[ID] = std::move(NewTask);
+            m_StoredTasks.emplace(ID,std::move(NewTask));
+        }
+
+
+        bool await_ready()
+        {
+            return m_FinishedCount.load() > 0;
+        }
+        bool await_suspend(std::coroutine_handle<> Handle)
+        {
+            std::lock_guard Lock(m_InternalsMutex);
+            if(m_FinishedTasks.size() > 0)
+            {
+                return false;
+            }
+            m_Continuation = Handle;
+            return true;
+        }
+        std::optional<T> await_resume()
+        {
+            std::lock_guard Lock(m_InternalsMutex);
+            if(m_FinishedTasks.size() == 0)
+            {
+                throw std::runtime_error("Invariant broken: await_resume called on UDPTaskQueue with no finished tasks");   
+            }
+            //std::optional<T> ReturnValue = m_FinishedTasks.back().await_resume();
+            auto ID = m_FinishedTasks.back();
+            m_FinishedTasks.pop_back();
+            m_FinishedCount.fetch_add(-1);
+            m_Size.fetch_add(-1);
+
+            auto It = m_StoredTasks.find(ID);
+            if(It == m_StoredTasks.end())
+            {
+                throw std::runtime_error("Error in UDPHandler: Task with invalid ID finished");
+            }
+            std::optional<T> ReturnValue = It->second.await_resume();
+            m_StoredTasks.erase(It);
+            return ReturnValue;
+        }
+        ~UDPTaskQueue()
+        {
+            if(m_Size.load() > 0)
+            {
+                assert(false && "Cannot destroy UDPTaskQueue without finishing all tasks!");
+            }
+        }
     };
 }

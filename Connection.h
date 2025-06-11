@@ -19,6 +19,8 @@
 #include <MBUtility/IndeterminateInputStream.h>
 
 #include <MBParsing/StreamSerialize.h>
+
+#include "Task.h"
 namespace MBChat2
 {
     struct ConnectionParameters
@@ -90,6 +92,8 @@ namespace MBChat2
         void SendStreamedResponse(MessageHeader const& RecievedMessage,MessageType Type,StreamedResponseHandler Handler);
 
         void SendMessage(Message MessageToSend,MessageCallback Callback);
+        MBUtility::Future<std::optional<std::pair<PeerInfo,Message>>> SendMessage(Message MessageToSend);
+
         uint16_t GetLocalPort();
 
         template<typename MessageType,typename FuncType>
@@ -330,51 +334,51 @@ namespace MBChat2
         template<typename T>
         struct OnErrorTag {};
             
-        template<typename T>
-        class Task : public  std::enable_shared_from_this<T>
-        {
-            std::shared_ptr<SharedState> m_State;
-            std::mutex m_InternalLock;
-        protected:
-            std::unique_lock<std::mutex> GetLock()
-            {
-                return std::unique_lock<std::mutex>(m_InternalLock);
-            }
-        public:
-            SharedState& GetState()
-            {
-                return *m_State;   
-            }
-            void SetSharedState(std::shared_ptr<SharedState> State)
-            {
-                m_State = std::move(State);   
-            }
+        //template<typename T>
+        //class Task : public  std::enable_shared_from_this<T>
+        //{
+        //    std::shared_ptr<SharedState> m_State;
+        //    std::mutex m_InternalLock;
+        //protected:
+        //    std::unique_lock<std::mutex> GetLock()
+        //    {
+        //        return std::unique_lock<std::mutex>(m_InternalLock);
+        //    }
+        //public:
+        //    SharedState& GetState()
+        //    {
+        //        return *m_State;   
+        //    }
+        //    void SetSharedState(std::shared_ptr<SharedState> State)
+        //    {
+        //        m_State = std::move(State);   
+        //    }
 
-            template<typename R>
-            std::enable_if_t<std::is_base_of_v<UDPRequest_,R>>
-                SendRequest(PeerInfo const& Peer,R Message)
-            {
-                typedef typename R::ResponseType Result;
-                auto Future = GetState().UDP->SendRequest(Peer,Message);
-                Future.Then([Obj=this->shared_from_this()](Result Res)
-                        {
-                            (*Obj)(Res);
-                        });
-                Future.OnError([Obj=this->shared_from_this(),Msg = std::move(Message)]()
-                        {
-                            (*Obj)(Msg);
-                        });
-            }
+        //    template<typename R>
+        //    std::enable_if_t<std::is_base_of_v<UDPRequest_,R>>
+        //        SendRequest(PeerInfo const& Peer,R Message)
+        //    {
+        //        typedef typename R::ResponseType Result;
+        //        auto Future = GetState().UDP->SendRequest(Peer,Message);
+        //        Future.Then([Obj=this->shared_from_this()](Result Res)
+        //                {
+        //                    (*Obj)(Res);
+        //                });
+        //        Future.OnError([Obj=this->shared_from_this(),Msg = std::move(Message)]()
+        //                {
+        //                    (*Obj)(Msg);
+        //                });
+        //    }
 
-            template<typename... Args>
-            MBUtility::MOFunction<void(Args...)> MakeCallback()
-            {
-                return [This=this->shared_from_this()](Args... Arguments) mutable
-                {
-                    (*This)(std::forward<Args>(Arguments)...);
-                };
-            }
-        };
+        //    template<typename... Args>
+        //    MBUtility::MOFunction<void(Args...)> MakeCallback()
+        //    {
+        //        return [This=this->shared_from_this()](Args... Arguments) mutable
+        //        {
+        //            (*This)(std::forward<Args>(Arguments)...);
+        //        };
+        //    }
+        //};
 
         //advertices these subscriptions with regular intervalls
         struct SharedState : public std::enable_shared_from_this<SharedState>
@@ -421,18 +425,6 @@ namespace MBChat2
 
             MessageCallback GetTCPMessageHandler();
 
-            template<typename T,typename... ArgTypes>
-            std::enable_if_t<std::is_constructible_v<T,ArgTypes...>> AddTask(ArgTypes&&... Args)
-            {
-                auto Task = std::make_shared<T>(std::forward<ArgTypes>(Args)...);
-                Task->SetSharedState(shared_from_this());
-                Task->Init();
-            }
-            template<typename ReturnType,typename... ArgTypes>
-            MBUtility::MOFunction<ReturnType(ArgTypes...)> MakeCallback(ReturnType (SharedState::* Func)(ArgTypes...))
-            {
-                return [Func=Func,Obj = shared_from_this()](ArgTypes... Args) {return (*Obj).*Func(Args...);};
-            }
 
             SharedState(std::string const& DatabasePath)
                 : DB(DatabasePath,MBDB::DBOpenOptions::ReadWrite)
@@ -441,227 +433,77 @@ namespace MBChat2
             }
         };
 
-
-        class InitializeConnection : public Task<InitializeConnection>
+        Task<std::optional<std::shared_ptr<Connection>>> InitializeConnection(PeerInfo TargetPeer,PeerInfo HostInfo)
         {
-            typedef MBUtility::MOFunction<void(std::shared_ptr<Connection>)> ConnectionCallback;
-            typedef MBUtility::MOFunction<void(PeerInfo const& )> ConnectionFailedCallback;
             InitConnection m_Request;
-            PeerInfo m_TargetPeer;
+            m_Request.HostInfo = std::move(HostInfo);
+            std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
+            m_Request.HostPort = m_UDPConnection->GetBoundPort();
+
             std::shared_ptr<Connection> m_ResultConnection;
-            std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection;
-            std::atomic<bool> m_Active = true;
-
-            ConnectionCallback m_ConnectionSucceedCallback;
-            ConnectionFailedCallback m_ConnectionFailedCallback;
-        public:
-
-            InitializeConnection(PeerInfo TargetPeer,PeerInfo HostInfo,ConnectionCallback Succeeded,ConnectionFailedCallback Failed)
+            auto Result = co_await m_State->UDP->SendRequest(TargetPeer,m_Request);
+            if(!Result.has_value())
             {
-                m_TargetPeer = TargetPeer;
-                m_Request.HostInfo = std::move(HostInfo);
-                m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
-                m_Request.HostPort = m_UDPConnection->GetBoundPort();
-
-                m_ConnectionSucceedCallback = std::move(Succeeded);
-                m_ConnectionFailedCallback = std::move(Failed);
+                co_return nullptr;
             }
+            auto const& AcceptedConnection = Result.value();
+            ConnectionParameters Params;
+            Params.IP = TargetPeer.IP;
+            Params.PeerPort = AcceptedConnection.HostPort;
+            Params.LocalPort = m_Request.HostPort;
+            Params.PeerID.Content = IDToString(TargetPeer.ID.Content);
+            m_UDPConnection->SetDstPort(AcceptedConnection.HostPort);
+            auto NewConnection = std::make_shared<Connection>(
+                    std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
+                    std::move(Params),
+                    TargetPeer,
+                    m_State->GetTCPMessageHandler(),
+                    [State=m_State,ID=m_Request.HostInfo.ID.Content](ConnectionParameters const& Params) mutable {
+                        std::lock_guard Lock(State->StateMutex);
+                        State->ActiveConnections.erase(State->ActiveConnections.find(ID));
+                    });
 
-            void Init()
+
             {
-                SendRequest(m_TargetPeer,m_Request);
+                std::lock_guard StateLock = std::lock_guard(m_State->StateMutex);
+                m_State->ActiveConnections[m_Request.HostInfo.ID.Content] = NewConnection;
             }
-
-            void operator()(InitConnection const& FailedConnection)
-            {
-                if(!m_Active)
-                {
-                    return; 
-                }
-                m_Active = false;
-                if(m_ConnectionFailedCallback)
-                {
-                    m_ConnectionFailedCallback(m_TargetPeer);
-                }
-            }
-            void operator()(InitConnection_Response const& AcceptedConnection)
-            {
-                if(!m_Active || !AcceptedConnection.Accepted)
-                {
-                    return; 
-                }
-                ConnectionParameters Params;
-                Params.IP = m_TargetPeer.IP;
-                Params.PeerPort = AcceptedConnection.HostPort;
-                Params.LocalPort = m_Request.HostPort;
-                Params.PeerID.Content = IDToString(m_TargetPeer.ID.Content);
-                m_UDPConnection->SetDstPort(AcceptedConnection.HostPort);
-                auto NewConnection = std::make_shared<Connection>(
-                        std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
-                        std::move(Params),
-                        m_TargetPeer,
-                        GetState().GetTCPMessageHandler(),
-                        [ID=m_Request.HostInfo.ID.Content,ThisTask=shared_from_this()](ConnectionParameters const& Params) mutable {
-                            std::lock_guard Lock(ThisTask->GetState().StateMutex);
-                            ThisTask->GetState().
-                            ActiveConnections.erase(ThisTask->GetState().ActiveConnections.find(ID));
-                        });
+            co_return NewConnection;
+        }
 
 
-                {
-                    std::lock_guard StateLock = std::lock_guard(GetState().StateMutex);
-                    GetState().ActiveConnections[m_Request.HostInfo.ID.Content] = NewConnection;
-                }
-                m_ConnectionSucceedCallback(NewConnection);
-            }
-        };
 
-        class SyncDBTask : public Task<SyncDBTask>
+        Task<std::vector<PeerInfo>> GetClosestPeers(ID const& ID)
         {
-            ResourceHeader m_MessageToDownload;
-            //try to send message to the peer  that send it in the first place,
-            //and fall back to sending it directly 
-            ID m_DBID;
-            PeerInfo m_TargetPeer;
-            PeerInfo m_HostInfo;
-        public:
-            //SyncDBTask(MessageLocation InitialLocation,ResourceHeader HeaderToDownload)
-            //{
+            FindPeerRequest Request;
+            Request.HostPeer = m_State->HostInfo;
+            Request.PeerID.Content = ID;
+            return GetClosestPeers(std::move(Request));
+        }
 
-            //}
-            SyncDBTask(std::vector<PeerInfo> const& Peers,ID DBID)
-            {
-                int PeerSyncCount = std::min(size_t(1),Peers.size());
-                if(Peers.size() > 0)
-                {
-                    m_TargetPeer = Peers[0];   
-                }
-                std::swap(DBID,m_DBID);
-                //random selection
-            }
-            void Init()
-            {
-                PeerInfo HostInfo;
-                {
-                    std::lock_guard Lock(GetState().StateMutex);
-                    HostInfo = GetState().HostInfo;
-                }
-                GetState().AddTask<InitializeConnection>(
-                        m_TargetPeer,
-                        HostInfo,
-                        MakeCallback<std::shared_ptr<Connection>>(),
-                        MakeCallback<PeerInfo const&>());
-            }
-
-            void operator()(PeerInfo const&)
-            {
-                   
-            }
-
-            void operator()(std::shared_ptr<Connection> NewConnection)
-            {
-                GetResources Message;
-                Message.DBHash.Content = m_DBID;
-                Message.EndID.Content = ID(m_DBID.size(),std::numeric_limits<uint8_t>::max());
-                Message.StartID.Content = ID(m_DBID.size(),0);
-                NewConnection->SendStreamingMessage<ResourceResponse>(std::move(Message),MakeCallback<ResourceResponse const&>());
-            }
-            void operator()(ResourceResponse const& NewHeader)
-            {
-                GetState().AddResourceToDB(NewHeader.Header,NewHeader.Content);
-            }
-
-            void operator()(GetResourceHeader const& FailedRequest)
-            {
-                   
-            }
-            void operator()(GetResourceContent const& FailedRequest)
-            {
-                   
-            }
-            void operator()(GetResourceHeader_Response const& Response)
-            {
-
-            }
-            void operator()(GetResourceContent_Response const& Response)
-            {
-            }
-        };
-        class FindClosestPeers : public Task<FindClosestPeers>
+        Task<std::vector<PeerInfo>> GetClosestPeers(FindPeerRequest PeerRequest)
         {
-            typedef MBUtility::MOFunction<void(std::vector<PeerInfo> const&)> PeersFoundCallback;
             int k = 30;
             size_t ReplicationCount = 3;
-            FindPeerRequest m_PeerRequest;
-            PeersFoundCallback m_Callback;
-            IDSorter m_MinHeapSorter;
-            IDSorter m_IDSorter;
-
-            std::atomic<bool> m_Finished = false;
-            std::atomic<int> m_ActiveRequest = 0;
-
+            IDSorter m_MinHeapSorter(PeerRequest.PeerID.Content,false);
+            IDSorter m_IDSorter(PeerRequest.PeerID.Content);
             std::unordered_set<std::string> m_ContactedPeers;
             std::vector<PeerInfo> m_ClosestPeers;
 
-            //try to send message to the peer  that send it in the first place,
-            //and fall back to sending it directly 
-            //
-            
-        public:
-            FindClosestPeers(FindPeerRequest PeerRequest,PeersFoundCallback PeersFound)
-                : m_MinHeapSorter(PeerRequest.PeerID.Content,false),m_IDSorter(PeerRequest.PeerID.Content)
+            UDPTaskQueue<FindPeer_Response> ActiveTasks;
+            for(size_t i = 0; i < std::min(m_ClosestPeers.size(),ReplicationCount);i++)
             {
-                if(PeersFound.IsEmpty())
-                {
-                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
-                }
-                m_Callback = std::move(PeersFound);
-                m_PeerRequest = std::move(PeerRequest);
+                ActiveTasks.AddTask(m_State->UDP->SendRequest(m_ClosestPeers[i],PeerRequest));
             }
-            FindClosestPeers(FindPeerRequest PeerRequest,ID const& DBID,PeersFoundCallback PeersFound)
-                : m_MinHeapSorter(PeerRequest.PeerID.Content,false),m_IDSorter(PeerRequest.PeerID.Content)
+            std::make_heap(m_ClosestPeers.begin(),m_ClosestPeers.end(),m_MinHeapSorter);
+            while(ActiveTasks.size() > 0)
             {
-                if(PeersFound.IsEmpty())
+                auto Result = co_await ActiveTasks;
+                if(!Result.has_value())
                 {
-                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
+                    continue;   
                 }
-                PeerRequest.PeerID.Content = DBID;
-                m_PeerRequest = std::move(PeerRequest);
-                m_Callback = std::move(PeersFound);
-            }
-            FindClosestPeers(ID const& TargetID,PeersFoundCallback PeersFound)
-                : m_MinHeapSorter(TargetID,false),m_IDSorter(TargetID)
-            {
-                if(PeersFound.IsEmpty())
-                {
-                    throw std::runtime_error("Invalid callback supplied to FindClosestPeers: empty not allowed");
-                }
-                m_Callback = std::move(PeersFound);
-                m_PeerRequest.PeerID.Content = TargetID;
-            }
-            void Init()
-            {
-                auto Lock = GetLock();
-                m_ClosestPeers = GetState().GetClosestPeers(m_PeerRequest.PeerID.Content,20);
-                for(size_t i = 0; i < std::min(m_ClosestPeers.size(),ReplicationCount);i++)
-                {
-                    SendRequest(m_ClosestPeers[i],m_PeerRequest);
-                    m_ActiveRequest.fetch_add(1);
-                }
-                std::make_heap(m_ClosestPeers.begin(),m_ClosestPeers.end(),m_MinHeapSorter);
-            }
-            void operator()(FindPeerRequest const& FailedRequest)
-            {
-                m_ActiveRequest.fetch_add(-1);
-            }
-            void operator()(FindPeer_Response Response)
-            {
-                if(m_Finished)
-                {
-                    return;   
-                }
-                auto Lock = GetLock();
-                m_ActiveRequest.fetch_add(-1);
+                auto& Response = Result.value();
                 if(Response.Peers.size()  > 0)
                 {
                     std::sort(Response.Peers.begin(),Response.Peers.end(),m_IDSorter);
@@ -684,30 +526,37 @@ namespace MBChat2
                             {
                                 m_ClosestPeers.resize(k);
                             }
-                            if(NewRequests < ReplicationCount && m_ClosestPeers.front().ID.Content != m_PeerRequest.HostPeer.ID.Content)
+                            if(NewRequests < ReplicationCount && m_ClosestPeers.front().ID.Content != PeerRequest.HostPeer.ID.Content)
                             {
-                                SendRequest(Peer,m_PeerRequest);
-                                m_ActiveRequest.fetch_add(1);
+                                ActiveTasks.AddTask(m_State->UDP->SendRequest(Peer,PeerRequest));
                             }
                         }
                     }
                 }
-                if(m_ClosestPeers.size() > 0 && m_ClosestPeers.front().ID.Content == m_PeerRequest.HostPeer.ID.Content)
+                if(m_ClosestPeers.size() > 0 && m_ClosestPeers.front().ID.Content == PeerRequest.HostPeer.ID.Content)
                 {
-                    m_Finished = true;
-                    if(m_Callback)
-                    {
-                        m_Callback(m_ClosestPeers);
-                    }
-                }
-                if(m_ActiveRequest.load() == 0)
-                {
-                    m_Finished = true;
-                    m_Callback(m_ClosestPeers);
+                    co_return m_ClosestPeers;
                 }
             }
-        };
-
+            co_return m_ClosestPeers;
+        }
+        Task<bool> SyncDB(std::vector<PeerInfo> Peers,ID DBID)
+        {
+            co_return false;
+        }
+        Task<bool> JoinDBTask(ID DBID)
+        {
+            FindPeerRequest Request;
+            Request.HostPeer = m_State->HostInfo;
+            Request.PeerID  = m_State->HostInfo.ID;
+            Request.k = 20;
+            Request.DBID = Hash();
+            Request.DBID.Value().Content = DBID;
+            m_State->AddSubscription(DBID,m_State->HostInfo);
+            auto ClosestPeers = co_await GetClosestPeers(std::move(Request));
+            auto SyncResult = co_await SyncDB(std::move(ClosestPeers),DBID);
+            co_return true;
+        }
 
         std::shared_ptr<SharedState> m_State;
     public:
@@ -728,8 +577,10 @@ namespace MBChat2
         bool GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader);
         //
 
-        MBUtility::Future<MBParsing::JSONObject> SendPeerRPC(ID const& PeerID,
-                MBParsing::JSONObject ObjectToSend);
+        Task<std::optional<MBParsing::JSONObject>> SendPeerRPC(ID const& PeerID,MBParsing::JSONObject Object);
+
+        //MBUtility::Future<MBParsing::JSONObject> SendPeerRPC(ID const& PeerID,
+        //        MBParsing::JSONObject ObjectToSend);
        
         void AddDBPeer(ID const& PeerID,ID const& DatabaseID);
         void AddDBPeer(PeerInfo const& Peer,ID const& DatabaseID);
