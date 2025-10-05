@@ -87,6 +87,7 @@ namespace MBChat2
         DatabaseDefinition p_LoadDatabase(ID const& DBID);
 
 
+        void p_AddEvent(MBUtility::MOFunction<void()> Event);
         void p_ResourceRecievedHandler(NewMessage const& Header);
         void p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response);
         std::vector<std::string> p_TokenizeCommand(std::string const& NewCommand);

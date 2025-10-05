@@ -248,13 +248,45 @@ namespace MBChat2
             {
                 if(Tokens.size() != 2)
                 {
-                    p_DisplayError("Chat requiers the DB id to initiate a chat with");
+                    p_DisplayError("Chat requires the peer id to initiate a chat with");
                 }
                 else
                 {
                     try
                     {
                         p_StartChat(StringToID(MBUtility::HexStringToBytes(Tokens[1])));
+                    }
+                    catch(std::exception const& e)
+                    {
+                        p_DisplayError("Error in addpeer: "+std::string(e.what()));
+                    }
+                }
+            }
+            else if(Tokens[0] == "join")
+            {
+                if(Tokens.size() != 2)
+                {
+                    p_DisplayError("join requires the DB id to join");
+                }
+                else
+                {
+                    try
+                    {
+                        auto DBID = StringToID(MBUtility::HexStringToBytes(Tokens[1]));
+                        auto Task = [](
+                                ID Database,
+                                std::shared_ptr<ConnectionManager> Manager,
+                                MBUtility::MOFunction<void()> Callback
+                                ) -> MBChat2::Task<bool>
+                        {
+                            co_await Manager->JoinDB(Database);
+                            Callback();
+                            co_return false;
+                        }(std::move(DBID),m_ConnectionManager,[this,ID = DBID]
+                                {
+                                    p_AddEvent([ID=ID,this](){ OpenDatabase(ID);});
+                                });
+                        Task.resume();
                     }
                     catch(std::exception const& e)
                     {
@@ -314,7 +346,7 @@ namespace MBChat2
             {
                 auto NewDB = p_CreateChatDB(PeerID,Client.m_LocalID);
                 Client.m_ConnectionManager->AddDBPeer(PeerID,NewDB.DatabaseID.Content);
-                Client.m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                co_await Client.m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
                 if(!Client.m_ConnectionManager->HasDB(NewDB.DatabaseID.Content))
                 {
                     Client.m_ConnectionManager->CreateDB(NewDB);
@@ -363,10 +395,15 @@ namespace MBChat2
         m_DBVisualiserWindow->SetChild(*VisualisersInfo.Visualiser.back());
         m_TopWindow.MoveRight();
     }
-    void Client::p_ResourceRecievedHandler(NewMessage const& Header)
+    void Client::p_AddEvent(MBUtility::MOFunction<void()> Event)
     {
         std::lock_guard Lock(m_InternalsMutex);
-        m_RecievedEvents.push_back([&,Header=Header]()
+        m_RecievedEvents.push_back(std::move(Event));
+        m_Terminal.CancelRead();
+    }
+    void Client::p_ResourceRecievedHandler(NewMessage const& Header)
+    {
+        p_AddEvent([&,Header=Header]()
                 {
                     auto It = m_ActiveVisualiser.find(Header.Header.OriginalDatabaseHash.Content);
                     if(It != m_ActiveVisualiser.end())
@@ -377,12 +414,10 @@ namespace MBChat2
                         }
                     }
                 });
-        m_Terminal.CancelRead();
     }
     void Client::p_RPCHandler(PeerInfo const& Peers, MBParsing::JSONObject const& Object,MBUtility::Promise<MBParsing::JSONObject> Response)
     {
-        std::lock_guard Lock(m_InternalsMutex);
-        m_RecievedEvents.push_back([&,Peers=Peers,Object=Object,Response=std::move(Response)] () mutable
+        p_AddEvent( [&,Peers=Peers,Object=Object,Response=std::move(Response)] () mutable
                 {
                     if(Object["method"].GetStringData() == "startChat")
                     {
@@ -401,7 +436,6 @@ namespace MBChat2
                         Response.SetValue(MBParsing::JSONObject(MBParsing::JSONObjectType::Aggregate));
                     }
                 });
-        m_Terminal.CancelRead();
     }
     int Client::Run()
     {
@@ -514,9 +548,16 @@ namespace MBChat2
             {
                 for(auto const& Entry : PluginIterator)
                 {
-                    if(Entry.is_regular_file() && Entry.path().extension() == ".lisp")
+                    if(Entry.is_directory())
                     {
-                        m_Evaluator->Eval(Entry.path());
+                        auto SourceIterator = std::filesystem::directory_iterator(Entry);
+                        for(auto const& File : SourceIterator)
+                        {
+                            if(File.is_regular_file() && File.path().extension() == ".lisp")
+                            {
+                                m_Evaluator->Eval(File.path());
+                            }
+                        }
                     }
                 }
             }

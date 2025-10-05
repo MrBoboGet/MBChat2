@@ -19,6 +19,8 @@
 #include <MBUtility/IndeterminateInputStream.h>
 
 #include <MBParsing/StreamSerialize.h>
+#include <numeric>
+#include <algorithm>
 
 #include "Task.h"
 namespace MBChat2
@@ -97,21 +99,25 @@ namespace MBChat2
         uint16_t GetLocalPort();
 
         template<typename MessageType,typename FuncType>
-        void SendStreamingMessage(MessageContent MessageToSend,FuncType Func)
+        MBUtility::Future<bool> SendStreamingMessage(MessageContent MessageToSend,FuncType Func)
         {
+            MBUtility::Promise<bool> Promise;
+            auto ReturnValue = Promise.GetFuture();
             std::lock_guard Lock(m_SharedState->SendMutex);
             QueuedMessage& NewMessage = m_SharedState->QueuedMessages.emplace_back();
             Message& RawMessage = NewMessage.MessageToSend.GetOrAssign<Message>();
             RawMessage.Header.MessageID = m_SharedState->NextSendID.fetch_add(1);
             RawMessage.Header.ResponseID = 0;
             RawMessage.Content = std::move(MessageToSend);
-            NewMessage.ResponseCallback =  StreamedHandler([Func=std::move(Func),State=m_SharedState](MBUtility::IndeterminateInputStream& StreamReader) mutable
+            NewMessage.ResponseCallback =  
+                StreamedHandler([Func=std::move(Func),State=m_SharedState,Promise=std::move(Promise)](MBUtility::IndeterminateInputStream& StreamReader) mutable
                 {
                     MessageType NewMessage;
                     uint16_t Size = 0;
                     StreamReader & Size;
                     if(Size == 0)
                     {
+                        Promise.SetValue(true);
                         return false;
                     }
                     try
@@ -122,11 +128,13 @@ namespace MBChat2
                     }
                     catch(...)
                     {
+                        Promise.SetValue(false);
                         return false;
                     }
                     return true;
                 });
             m_SharedState->SendConditional.notify_one();
+            return ReturnValue;
         }
 
         //handles messages not sent from a response, such as peer requets and notifications
@@ -249,11 +257,18 @@ namespace MBChat2
             //Node.Left == nullptr <-> Node.Right == nullptr
             if(Node.Left == nullptr)
             {
+                std::vector<int> SortedIndecies;
+                SortedIndecies.resize(Node.Content.size());
+                std::iota(SortedIndecies.begin(),SortedIndecies.end(),0);
+                std::sort(SortedIndecies.begin(),SortedIndecies.end(),[&](int lhs,int rhs)
+                        {
+                            return Sorter(Node.Content[lhs],Node.Content[rhs]);
+                        });
                 for(size_t i = 0; i < std::min(Node.Content.size(),size_t(OutInfo.size()-k));i++)
                 {
-                    if(AcceptFunc(Node.Content[i]))
+                    if(AcceptFunc(Node.Content[SortedIndecies[ i]]))
                     {
-                        OutInfo.push_back(Node.Content[i]);
+                        OutInfo.push_back(Node.Content[SortedIndecies[i]]);
                     }
                 }
             }
@@ -408,6 +423,8 @@ namespace MBChat2
 
             void NotificationHandler(MessageLocation Location,UDPNotification const& Notification);
             UDPResponse RequestHandler(MessageLocation Location,UDPRequest const& Notification);
+
+            void StoreContent(ResourceHeader const& Header,std::string const& Content);
             void AddResourceToDB(ResourceHeader const& Header,std::string const& Content);
             void RemoveResource(ID const& DBID,ID const& ResourceID);
             void RemoveResource(ID const& DBID,std::vector<std::string> const& Path);
@@ -433,10 +450,18 @@ namespace MBChat2
             }
         };
 
-        Task<std::optional<std::shared_ptr<Connection>>> InitializeConnection(PeerInfo TargetPeer,PeerInfo HostInfo)
+        Task<std::optional<std::shared_ptr<Connection>>> InitializeConnection(PeerInfo TargetPeer)
         {
             InitConnection m_Request;
-            m_Request.HostInfo = std::move(HostInfo);
+            {
+                std::lock_guard Lock(m_State->StateMutex);
+                auto It = m_State->ActiveConnections.find(TargetPeer.ID.Content);
+                if(It != m_State->ActiveConnections.end())
+                {
+                    co_return It->second;
+                }
+            }
+            m_Request.HostInfo = m_State->HostInfo;
             std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
             m_Request.HostPort = m_UDPConnection->GetBoundPort();
 
@@ -466,7 +491,7 @@ namespace MBChat2
 
             {
                 std::lock_guard StateLock = std::lock_guard(m_State->StateMutex);
-                m_State->ActiveConnections[m_Request.HostInfo.ID.Content] = NewConnection;
+                m_State->ActiveConnections[TargetPeer.ID.Content] = NewConnection;
             }
             co_return NewConnection;
         }
@@ -489,6 +514,14 @@ namespace MBChat2
             IDSorter m_IDSorter(PeerRequest.PeerID.Content);
             std::unordered_set<std::string> m_ContactedPeers;
             std::vector<PeerInfo> m_ClosestPeers;
+            if(PeerRequest.DBID.IsInitalized())
+            {
+                 m_ClosestPeers = m_State->GetClosestPeers(PeerRequest.PeerID.Content,PeerRequest.DBID.Value().Content,10);
+            }
+            else
+            {
+                 m_ClosestPeers = m_State->GetClosestPeers(PeerRequest.PeerID.Content,10);
+            }
 
             UDPTaskQueue<FindPeer_Response> ActiveTasks;
             for(size_t i = 0; i < std::min(m_ClosestPeers.size(),ReplicationCount);i++)
@@ -542,6 +575,28 @@ namespace MBChat2
         }
         Task<bool> SyncDB(std::vector<PeerInfo> Peers,ID DBID)
         {
+            //take some arbitrary peer for the current version
+            if(Peers.size() == 0)
+            {
+                co_return true;   
+            }
+            auto const& SyncPeer = Peers.front();
+            auto ConnectionResult = co_await InitializeConnection(SyncPeer);
+            if(!ConnectionResult.has_value() || ConnectionResult.value() == nullptr)
+            {
+                co_return false;
+            }
+            auto Connection = ConnectionResult.value();
+            MessageContent Content;
+            GetResources Request;
+            Request.DBHash = DBID;
+            Request.StartTime = 0;
+            Request.EndTime = std::numeric_limits<TimestampType>::max();
+            auto Handler = [State=m_State](ResourceResponse const& Response)
+            {
+                State->AddResourceToDB(Response.Header,Response.Content);
+            };
+            co_await Connection->SendStreamingMessage<ResourceResponse>(std::move(Content),Handler);
             co_return false;
         }
         Task<bool> JoinDBTask(ID DBID)
@@ -589,7 +644,7 @@ namespace MBChat2
 
         //called once after all of the initial parameters are set
         void JoinNetwork();
-        void JoinDB(ID const& DBID);
+        Task<bool> JoinDB(ID const& DBID);
     };
 }
 

@@ -567,7 +567,7 @@ namespace MBChat2
             {
                 co_return ReturnValue;
             }
-            auto ConnectionResult = co_await InitializeConnection(TargetPeer,m_State->HostInfo);
+            auto ConnectionResult = co_await InitializeConnection(TargetPeer);
             if(!ConnectionResult.has_value())
             {
                 co_return ReturnValue;
@@ -594,11 +594,11 @@ namespace MBChat2
         GetClosestPeers(std::move(Request)).resume();
         //m_State->AddTask<FindClosestPeers>(std::move(Request),[](auto const&){});
     }
-    void ConnectionManager::JoinDB(ID const& DBID)
+    Task<bool> ConnectionManager::JoinDB(ID const& DBID)
     {
         //m_State->AddJoinDBTask(DBID);
         auto Task = JoinDBTask(DBID);
-        Task.resume();
+        return Task;
     }
 
     std::vector<PeerInfo> ConnectionManager::SharedState::GetClosestPeers(ID const& ID,int k)
@@ -609,7 +609,7 @@ namespace MBChat2
     std::vector<PeerInfo> ConnectionManager::SharedState::GetClosestPeers(ID const& TargetID,ID const& DatabaseID,int k)
     {
         std::lock_guard Lock(StateMutex);
-        auto It = PeerSubscriptions.find(TargetID);
+        auto It = PeerSubscriptions.find(DatabaseID);
         if(It == PeerSubscriptions.end())
         {
             return {};
@@ -825,8 +825,37 @@ namespace MBChat2
         }
         return Response;
     }
+    
+    void ConnectionManager::SharedState::StoreContent(ResourceHeader const& Header,std::string const& Content)
+    {
+        
+    }
     void ConnectionManager::SharedState::AddResourceToDB(ResourceHeader const& Header,std::string const& Content)
     {
+        auto InDBStmt = DB.GetSQLStatement(
+                "SELECT StoredLocaly,StoredInline FROM Resources "
+                " WHERE Hash =:Hash AND DatabaseHash = :DBHash");
+        InDBStmt.BindBlob("Hash",Header.HeaderHash.Content);
+        InDBStmt.BindBlob("DBHash",Header.OriginalDatabaseHash.Content);
+        auto Resources = DB.GetAllRows(InDBStmt);
+        if(Resources.size() > 0)
+        {
+            auto const& Row = Resources.front();
+            auto StoredInline = std::get<MBDB::IntType>(Row["StoredInline"]) != 0;
+            auto StoredLocaly = std::get<MBDB::IntType>(Row["StoredLocaly"]) != 0;
+            if(!StoredLocaly)
+            {
+                //always store inline...
+                auto StoreStmt = DB.GetSQLStatement(
+                        "UPDATE Resources SET StoredLocaly = 1,StoredInlien = 1,Content=:Content WHERE Hash = :Hash AND DatabaseHash = :DBHash");
+                StoreStmt.BindBlob("Hash",Header.HeaderHash.Content);
+                StoreStmt.BindBlob("DBHash",Header.OriginalDatabaseHash.Content);
+                StoreStmt.BindBlob("Content",Content);
+                DB.GetAllRows(StoreStmt);
+            }
+            return;
+        }
+
         auto Stmt = DB.GetSQLStatement(
                 "INSERT INTO Resources(Hash,ContentType,UpType,Time,ContentSize,DatabaseHash,ParentHash,ContentHash, "
             "UploaderID,Signature,StoredLocaly,StoredInline,Content,RecievedTimestamp,Name) VALUES (:Hash,:ContentType,:UpType,:Timestamp,:ContentSize,:DatabaseHash, "
@@ -1003,11 +1032,15 @@ namespace MBChat2
                 if(It != State->ActiveConnections.end())
                 {
                     It->second->SendStreamedResponse(Message.Header,MessageType::RPC,
-                            [State=State,DBID= Request.DBHash](MBUtility::MBOctetOutputStream& OutStream) mutable
+                            [State=State,DBID= Request.DBHash,Start=Request.StartTime,
+                                End=Request.EndTime,MaxInlineSize=Request.MaxInlineSize](MBUtility::MBOctetOutputStream& OutStream) mutable
                             {
+                                constexpr size_t MaxTransferSize = 10000000;
                                 //TODO make into a true row iterator instead
-                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash");
+                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash AND Time BETWEEN :Start :End ");
                                 Stmt.BindBlob("Hash",DBID.Content);
+                                Stmt.BindBlob("Start",Start);
+                                Stmt.BindBlob("End",End);
                                 auto Rows = State->DB.GetAllRows(Stmt);
                                 for(auto const& Row : Rows)
                                 {
@@ -1024,7 +1057,7 @@ namespace MBChat2
 
                                     //arbitrary number
                                     if(std::get<int64_t>(Row["StoredLocaly"]) && 
-                                            std::get<int64_t>(Row["StoredInline"]) && Content.Header.ContentSize < 2000)
+                                            std::get<int64_t>(Row["StoredInline"]) && Content.Header.ContentSize < MaxInlineSize && Content.Header.ContentSize < MaxTransferSize)
                                     {
                                         Content.Content = std::get<std::string>(Row["Content"]);
                                     }
@@ -1070,8 +1103,9 @@ namespace MBChat2
         m_State->HostInfo.ID = Params.LocalID;
 
         //Retrieve all subscriptions
-        auto Subscriptions = m_State->DB.GetAllRows("SELECT DatabaseID,PeerID,IP,Port FROM Subscriptions LEFT JOIN Peers "
-                "ON PeerID=ID");
+        auto Subscriptions = m_State->DB.GetAllRows(
+                "SELECT DatabaseID,PeerID,IP,Port FROM Subscriptions LEFT JOIN Peers "
+                " ON PeerID=ID");
         m_State->PortMapper.AddPortMapping(ListenPort);
         for(auto& Row : Subscriptions)
         {

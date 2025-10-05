@@ -2,6 +2,6 @@
 	"PacketName":"MBChat2",
     "PacketType":"C++",
 	"Attributes":[],
-    "SubPackets":[],
+    "SubPackets":["/Plugins/Chat","/Plugins/Board","/MBChatPluginPacket"],
     "Dependancies":["MBUtility","MBUPNP","MrBoboDatabase","MBCLI","MBTUI","MrBoboSockets","MBParsing","MBTCP","MBLisp"]
 }

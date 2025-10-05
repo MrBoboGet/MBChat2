@@ -14,6 +14,8 @@ namespace MBChat2
 {
     using MBParsing::operator&;
 
+    typedef uint64_t TimestampType;
+
     typedef std::vector<uint8_t> ID;
     enum class MessageType : uint32_t
     {
@@ -33,6 +35,7 @@ namespace MBChat2
         RPCResponse,
 
         GetResources,
+        ResourceHeader,
         //Kademlia messages
         Store,
         FindNode,
@@ -373,16 +376,16 @@ namespace MBChat2
     struct GetResources : public MessageBase<MessageType::GetResources>
     {
         Hash DBHash;
-        Hash StartID;
-        Hash EndID;
+        TimestampType StartTime;
+        TimestampType EndTime;
         uint64_t MaxInlineSize = 1500;
 
         uint64_t SerializedSize()
         {
             uint64_t  ReturnValue = 0;
             ReturnValue += DBHash.SerializedSize();
-            ReturnValue += StartID.SerializedSize();
-            ReturnValue += EndID.SerializedSize();
+            ReturnValue += sizeof(StartTime);
+            ReturnValue += sizeof(EndTime);
             ReturnValue += sizeof(MaxInlineSize);
             return ReturnValue;
         }
@@ -391,8 +394,8 @@ namespace MBChat2
         friend void Parse(T& Stream,GetResources& Value,uint16_t Version)
         {
             Parse(Stream,Value.DBHash,Version);
-            Parse(Stream,Value.StartID,Version);
-            Parse(Stream,Value.EndID,Version);
+            Stream & Value.StartTime;
+            Stream & Value.EndTime;
             Stream & Value.MaxInlineSize;
         }
     };
@@ -463,7 +466,7 @@ namespace MBChat2
     };
     //Messages
 
-    typedef MBUtility::StaticVariant<JSONRPC,GetResources> MessageContent;
+    typedef MBUtility::StaticVariant<JSONRPC,GetResources,ResourceHeader> MessageContent;
    
     template<typename T>
     void Parse(T& Stream,MessageType Type,MessageContent& Value,uint16_t Version)

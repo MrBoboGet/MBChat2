@@ -17,6 +17,7 @@
 #include "OverlayProtocol.h"
 
 #include <coroutine>
+#include <optional>
 
 
 namespace MBChat2
