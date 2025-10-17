@@ -113,8 +113,8 @@ namespace MBChat2
                         //uint32_t ResponseID = 0;
                         //uint64_t MessageLength = 0;
                         auto& StreamedMessage = QueuedMessage.MessageToSend.GetType<StreamedResponseMessage>();
-                        ((MBUtility::MBOctetOutputStream&) State->Transport) & StreamedMessage.Header;
-                        StreamedMessage.Handler( (MBUtility::MBOctetOutputStream&)State->Transport);
+                        ((MBUtility::MBOctetOutputStream&) *State->Transport) & StreamedMessage.Header;
+                        StreamedMessage.Handler( (MBUtility::MBOctetOutputStream&)*State->Transport);
                     }
                 }
             }
@@ -1037,10 +1037,10 @@ namespace MBChat2
                             {
                                 constexpr size_t MaxTransferSize = 10000000;
                                 //TODO make into a true row iterator instead
-                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash AND Time BETWEEN :Start :End ");
+                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash AND Time BETWEEN :Start AND :End ");
                                 Stmt.BindBlob("Hash",DBID.Content);
-                                Stmt.BindBlob("Start",Start);
-                                Stmt.BindBlob("End",End);
+                                Stmt.BindInt("Start",Start);
+                                Stmt.BindInt("End",End);
                                 auto Rows = State->DB.GetAllRows(Stmt);
                                 for(auto const& Row : Rows)
                                 {

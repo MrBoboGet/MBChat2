@@ -426,7 +426,8 @@ namespace MBChat2
                             auto NewDB = p_CreateChatDB(Peers.ID.Content,m_LocalID);
                             m_ConnectionManager->CreateDB(NewDB);
                             m_ConnectionManager->AddDBPeer(Peers,NewDB.DatabaseID.Content);
-                            m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                            //co_await m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content);
+                            m_ConnectionManager->AddTask(m_ConnectionManager->JoinDB(NewDB.DatabaseID.Content));
                             p_AddVisualiser(NewDB);
                         }
                         catch(...)

@@ -171,7 +171,7 @@ namespace MBChat2
         }
     };
 
-    struct ResourceHeader
+    struct ResourceHeader : public MessageBase<MessageType::ResourceHeader>
     {
         Hash HeaderHash;
         ContentType Type = ContentType::Text;
@@ -438,8 +438,9 @@ namespace MBChat2
         std::vector<Peer> Result;
     };
 
-    struct JSONRPC
+    struct JSONRPC : public MessageBase<MessageType::GetResources>
     {
+        static constexpr MessageType TypeID = MessageType::JSONRPC;
         MBParsing::JSONObject Object;
         template<typename T>
         friend void Parse(T& Stream,JSONRPC& Value,uint16_t Version)
@@ -478,6 +479,10 @@ namespace MBChat2
         else if(Type == MessageType::JSONRPC)
         {
             Parse(Stream,Value.GetOrAssign<JSONRPC>(),Version);
+        }
+        else if(Type == MessageType::ResourceHeader)
+        {
+            Parse(Stream,Value.GetOrAssign<ResourceHeader>(),Version);
         }
     }
     template<typename T,typename V>

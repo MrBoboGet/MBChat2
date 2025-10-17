@@ -87,7 +87,7 @@ namespace MBChat2
     public:
         ~Connection();
 
-        Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> PacketStream,ConnectionParameters Params,PeerInfo Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
+       Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> PacketStream,ConnectionParameters Params,PeerInfo Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
 
 
         void SendResponse(MessageHeader const& RecievedMessage,Message Response);
@@ -98,7 +98,7 @@ namespace MBChat2
 
         uint16_t GetLocalPort();
 
-        template<typename MessageType,typename FuncType>
+        template<typename ResponseType,typename FuncType>
         MBUtility::Future<bool> SendStreamingMessage(MessageContent MessageToSend,FuncType Func)
         {
             MBUtility::Promise<bool> Promise;
@@ -108,11 +108,12 @@ namespace MBChat2
             Message& RawMessage = NewMessage.MessageToSend.GetOrAssign<Message>();
             RawMessage.Header.MessageID = m_SharedState->NextSendID.fetch_add(1);
             RawMessage.Header.ResponseID = 0;
+            RawMessage.Header.Type = MessageToSend.Visit([](auto& member){return member.type;});
             RawMessage.Content = std::move(MessageToSend);
             NewMessage.ResponseCallback =  
                 StreamedHandler([Func=std::move(Func),State=m_SharedState,Promise=std::move(Promise)](MBUtility::IndeterminateInputStream& StreamReader) mutable
                 {
-                    MessageType NewMessage;
+                    ResponseType NewMessage;
                     uint16_t Size = 0;
                     StreamReader & Size;
                     if(Size == 0)
@@ -588,7 +589,7 @@ namespace MBChat2
             }
             auto Connection = ConnectionResult.value();
             MessageContent Content;
-            GetResources Request;
+            GetResources& Request = Content.emplace<GetResources>();
             Request.DBHash = DBID;
             Request.StartTime = 0;
             Request.EndTime = std::numeric_limits<TimestampType>::max();
@@ -645,6 +646,15 @@ namespace MBChat2
         //called once after all of the initial parameters are set
         void JoinNetwork();
         Task<bool> JoinDB(ID const& DBID);
+
+        template<typename T>
+        void AddTask(T Task)
+        {
+            m_State->ThreadPool.AddTask([Task=std::move(Task)]()
+                    {
+                        Task.resume();
+                    });
+        }
     };
 }
 
