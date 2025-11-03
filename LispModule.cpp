@@ -8,7 +8,7 @@ namespace MBChat2
         : m_UnderylingWindow(Evaluator,Val)
     {
         SetChild(m_UnderylingWindow);
-        m_ChatScope = Evaluator->GetModuleScope("mbchat");
+       m_ChatScope = Evaluator->GetModuleScope("mbchat");
     }
     void LispVisualiser::Init() 
     {
@@ -210,6 +210,7 @@ namespace MBChat2
         return ReturnValue;
     }
     void GetResource_ImplPrepared(MBDB::MrBoboDatabase& DB,
+                            ID const& DBID,
                             MBLisp::List& OutResult ,
                             MBDB::SQLStatement& ExplicitName,
                             MBDB::SQLStatement& AllParent,
@@ -228,6 +229,7 @@ namespace MBChat2
         {
             AllParent.Reset();
             AllParent.BindValue("ParentID",ParentInt);
+            AllParent.BindBlob("DatabaseID",DBID);
             auto Rows = DB.GetAllRows(AllParent);
             for(auto const& Row : Rows)
             {
@@ -250,7 +252,7 @@ namespace MBChat2
                     {
                         size_t PreviousPathSize = CurrentPath.size();
                         CurrentPath.push_back(Name);
-                        GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
+                        GetResource_ImplPrepared(DB,DBID,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
                         CurrentPath.resize(PreviousPathSize);
                     }
                 }
@@ -261,6 +263,7 @@ namespace MBChat2
             ExplicitName.Reset();
             ExplicitName.BindValue("ParentID",ParentInt);
             ExplicitName.BindString("Name",CurrentPart.Name);
+            ExplicitName.BindBlob("DatabaseID",DBID);
             auto Rows = DB.GetAllRows(ExplicitName);
             for(auto const& Row : Rows)
             {
@@ -280,7 +283,7 @@ namespace MBChat2
                 {
                     size_t PreviousPathSize = CurrentPath.size();
                     CurrentPath.push_back(Name);
-                    GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
+                    GetResource_ImplPrepared(DB,DBID,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,Offset+1,RecursiveIndex);
                     CurrentPath.resize(PreviousPathSize);
                 }
             }
@@ -289,6 +292,7 @@ namespace MBChat2
         {
             AllParent.Reset();
             AllParent.BindValue("ParentID",ParentInt);
+            AllParent.BindBlob("DatabaseID",DBID);
             auto Rows = DB.GetAllRows(AllParent);
             for(auto const& Row : Rows)
             {
@@ -298,7 +302,7 @@ namespace MBChat2
                 auto NewID = std::get<MBDB::IntType>(Row["ID"]);
                 size_t PreviousPathSize = CurrentPath.size();
                 CurrentPath.push_back(Name);
-                GetResource_ImplPrepared(DB,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,RecursiveIndex,RecursiveIndex);
+                GetResource_ImplPrepared(DB,DBID,OutResult,ExplicitName,AllParent,Parts,NewID,CurrentPath,RecursiveIndex,RecursiveIndex);
                 CurrentPath.resize(PreviousPathSize);
             }
         }
@@ -310,12 +314,13 @@ namespace MBChat2
                             size_t Offset)
     {
         auto DB = Connection.GetDB();
-        MBDB::SQLStatement ExplicitName = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID AND Name = :Name");
-        MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID");
+        auto DBID = Connection.GetDBID();
+        MBDB::SQLStatement ExplicitName = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID AND Name = :Name AND DatabaseID = :DatabaseID");
+        MBDB::SQLStatement AllParent = DB->GetSQLStatement("SELECT ID,ParentID,ResourceID,Name FROM ActiveTree WHERE ParentID = :ParentID AND DatabaseID = :DatabaseID");
         MBDB::IntType ParentID = 0;
         MBDB::IntType OutID = 0;
         std::vector<std::string> ParentPath =  Connection.GetAbsoluteResourcePath(ResourceRoot,ParentID,OutID);
-        GetResource_ImplPrepared(*DB,OutResult,ExplicitName,AllParent,Parts,ParentID,ParentPath,Offset);
+        GetResource_ImplPrepared(*DB,DBID,OutResult,ExplicitName,AllParent,Parts,ParentID,ParentPath,Offset);
     }
 
     MBLisp::Value GetResource(DBConnection& Connection,MBLisp::String const& Path)

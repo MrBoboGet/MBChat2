@@ -8,6 +8,7 @@
 #include "Visualisers/ChatVisualiser.h"
 
 #include "LispModule.h"
+#include <chrono>
 namespace MBChat2
 {
     //
@@ -327,6 +328,8 @@ namespace MBChat2
         ReturnValue.Participants.push_back(LocalID);
         ReturnValue.Participants.push_back(PeerID);
         ReturnValue.Type = "Chat";
+        //ReturnValue.Timestamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        ReturnValue.Timestamp = 0;
         std::sort(ReturnValue.Participants.begin(),ReturnValue.Participants.end());
         ReturnValue.CalculateHash();
         return ReturnValue;
@@ -382,9 +385,9 @@ namespace MBChat2
         auto& VisualisersInfo = m_ActiveVisualiser[Database.DatabaseID.Content];
         if(VisualisersInfo.Connection == nullptr)
         {
-            std::shared_ptr<MBDB::MrBoboDatabase> NewDB = std::make_shared<MBDB::MrBoboDatabase>(":memory:",MBDB::DBOpenOptions::ReadOnly);
-            NewDB->Exec("ATTACH '"+MBUnicode::PathToUTF8(m_DBPath.lexically_normal())+"' AS Parent");
-            NewDB->Exec("CREATE temp View Resources AS SELECT * FROM Parent.Resources");
+            std::shared_ptr<MBDB::MrBoboDatabase> NewDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(m_DBPath.lexically_normal()),MBDB::DBOpenOptions::ReadOnly);
+            //NewDB->Exec("ATTACH '"+MBUnicode::PathToUTF8(m_DBPath.lexically_normal())+"' AS Parent");
+            //NewDB->Exec("CREATE temp View Resources AS SELECT * FROM Parent.Resources");
             VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,Database.DatabaseID.Content);
         }
         m_VisualisedDB = Database.DatabaseID.Content;

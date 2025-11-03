@@ -8,6 +8,7 @@
 
 #include <MBUPNP/MBUPNP.h>
 #include <MBUtility/Async.h>
+#include <chrono>
 
 namespace MBChat2
 {
@@ -476,7 +477,7 @@ namespace MBChat2
         NewMessage NotificationToSend;
         NotificationToSend.Header.Type = PublishedMessage.Type;
         NotificationToSend.Header.UpType = PublishedMessage.UpType;
-        NotificationToSend.Header.TimeStamp = 0;
+        NotificationToSend.Header.TimeStamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         NotificationToSend.Header.ContentSize = PublishedMessage.Content.size();
         NotificationToSend.Content = std::move(PublishedMessage.Content);
         NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
@@ -1037,7 +1038,8 @@ namespace MBChat2
                             {
                                 constexpr size_t MaxTransferSize = 10000000;
                                 //TODO make into a true row iterator instead
-                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash AND Time BETWEEN :Start AND :End ");
+                                auto Stmt = State->DB.GetSQLStatement("SELECT * FROM Resources WHERE DatabaseHash = :Hash "
+                                        " AND Time BETWEEN :Start AND :End  ORDER BY TIME ASC");
                                 Stmt.BindBlob("Hash",DBID.Content);
                                 Stmt.BindInt("Start",Start);
                                 Stmt.BindInt("End",End);
