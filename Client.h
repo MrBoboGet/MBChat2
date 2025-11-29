@@ -14,6 +14,7 @@ namespace MBChat2
 
     typedef MBUtility::MOFunction<std::unique_ptr<DBVisualiser>()> VisualiserFactory;
     typedef MBUtility::MOFunction<void(std::vector<MBLisp::Value> const&)> CommandFunc;
+    typedef MBUtility::MOFunction<std::vector<std::string>(std::vector<std::string> const&)> CompletionFunc;
 
     class Client : public std::enable_shared_from_this<Client>
     {
@@ -49,6 +50,7 @@ namespace MBChat2
         std::unordered_map<ID,DBVisualiserInfo> m_ActiveVisualiser;
         std::unordered_map<std::string,VisualiserFactory> m_RegisteredVisualisers;
         std::unordered_map<std::string,CommandFunc> m_RegisteredCommands;
+        std::unordered_map<std::string,CompletionFunc> m_RegisteredCompletions;
 
         ID m_LocalID;
 
@@ -101,6 +103,7 @@ namespace MBChat2
         void AddVisualiser(std::string const& DatabaseType,
                 VisualiserFactory Factory);
         void AddCommand(std::string const& CommandName, CommandFunc Result);
+        void AddCommandCompletion(std::string const& CommandName, CompletionFunc Func);
         void DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow);
         void OpenDatabase(ID const& DatabaseID);
         DatabaseDefinition CreateDatabase(DatabaseDefinition Definition);

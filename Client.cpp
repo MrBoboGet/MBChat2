@@ -92,7 +92,9 @@ namespace MBChat2
                 if(Character.CharacterInput == ':')
                 {
                     m_LayerHandleInput = true;
-                    m_CommandRepl.SetMaxDims(MBCLI::Dimensions(-1,1));
+                    MBTUI::SizeSpecification SizeSpecification;
+                    SizeSpecification.SetHeight(1);
+                    m_CommandRepl.SetSizeSpec(SizeSpecification);
                     m_CommandRepl.SetOnEnterFunc([&](std::string const& String){p_HandleCommandString(String);});
                     m_TopLayerer.AddLayer(MBUtility::SmartPtr<MBCLI::Window>(&m_CommandRepl));
                 }
@@ -129,14 +131,27 @@ namespace MBChat2
                 ReturnValue.emplace_back(Command.first);
             }
         }
+        else if(LineInfo.Tokens.size() > 1)
+        {
+            auto CompletionIt = m_RegisteredCompletions.find(LineInfo.Tokens[0]);
+            if(CompletionIt != m_RegisteredCompletions.end())
+            {
+                return CompletionIt->second(LineInfo.Tokens);
+            }
+        }
         return ReturnValue;
     }
     void Client::AddCommand(std::string const& CommandName, MBUtility::MOFunction<void(std::vector<MBLisp::Value> const&)> Result)
     {
         m_RegisteredCommands[CommandName] = std::move(Result);
     }
+    void Client::AddCommandCompletion(std::string const& CommandName, CompletionFunc Func)
+    {
+        m_RegisteredCompletions[CommandName] = std::move(Func);
+    }
     void Client::DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow)
     {
+
         if(m_LayerHandleInput)
         {
             throw std::runtime_error("Windows is already being displayed!");

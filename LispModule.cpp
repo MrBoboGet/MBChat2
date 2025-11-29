@@ -99,6 +99,29 @@ namespace MBChat2
         ReturnValue = std::get<std::string>(Row["Content"]);
         return ReturnValue;
     }
+    MBLisp::String GetUser(DBConnection& Connection,ResourceHandle const& Resource)
+    {
+        MBLisp::String ReturnValue;
+
+        auto DB = Connection.GetDB();
+        auto Stmt = DB->GetSQLStatement("SELECT UploaderID FROM Resources WHERE Hash = :Hash");
+        Stmt.BindBlob("Hash",Resource.Id);
+        
+        auto Rows = DB->GetAllRows(Stmt);
+        if(Rows.size() == 0)
+        {
+            throw std::runtime_error("Cannot get content: invalid resource id");
+        }
+        if(Rows.size() > 1)
+        {
+            throw std::runtime_error("Error getting content: invariant broken, more than one row in db");
+        }
+		auto const& Row = Rows[0];
+        auto const& ID = std::get<std::string>(Row["UploaderID"]);
+        ReturnValue = MBUtility::HexEncodeString(ID);
+        ReturnValue = ReturnValue.substr(0,10);
+        return ReturnValue;
+    }
     std::vector<std::string> GetPath(ResourceHandle const& Resource)
     {
         return Resource.Path;
@@ -528,6 +551,14 @@ namespace MBChat2
         Def.Type = Type;
         return Def;
     }
+    static MBLisp::List GetDatabases(Client& Client,MBLisp::Evaluator& Evaluator)
+    {
+        MBLisp::List ReturnValue;
+
+
+
+        return ReturnValue;
+    }
 
     MBLisp::Ref<MBLisp::Scope> ChatLispModule::GetModuleScope(MBLisp::Evaluator& AssociatedEvaluator) 
     {
@@ -556,6 +587,35 @@ namespace MBChat2
                                     CallArgs.push_back(Arg);
                                 }
                                 Evaluator->Eval(Val,std::move(CallArgs));
+                            });
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"add-completion",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::String const& CommandName,MBLisp::Value const& Val) mutable
+                {
+                    Client->AddCommandCompletion(CommandName,[Val = Val,Evaluator=Evaluator](std::vector<std::string> const& Args) -> std::vector<std::string>
+                            {
+                                MBLisp::FuncArgVector CallArgs;
+                                MBLisp::List Tokens;
+                                for(auto const& Token : Args)
+                                {
+                                    Tokens.push_back(Token);
+                                }
+                                CallArgs.push_back(std::move(Tokens));
+                                auto Res = Evaluator->Eval(Val,std::move(CallArgs));
+                                if(!Res.IsType<MBLisp::List>())
+                                {
+                                    throw std::runtime_error("Error evaluating completions: Resulst is not a list");
+                                }
+                                std::vector<std::string> ReturnValue;
+                                for(auto const& Value : Res.GetType<MBLisp::List>())
+                                {
+                                    if(Value.IsType<MBLisp::String>())
+                                    {
+                                        throw std::runtime_error("Error evaluating completion func: Element of result is not a string");
+                                    }
+                                    ReturnValue.push_back(Value.GetType<MBLisp::String>());
+                                }
+                                return ReturnValue;
                             });
                 });
         AssociatedEvaluator.AddFunctionObject(ReturnValue,"display-overlay",
@@ -621,9 +681,15 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<RemoveResource_Path>(ReturnValue,"remove-resource");
 
 
+
+
         AssociatedEvaluator.AddGeneric<AddChild_Path>(ReturnValue,"add-child");
 
         AssociatedEvaluator.AddGeneric<GetContent>(ReturnValue,"get-content");
+        AssociatedEvaluator.AddGeneric<GetUser>(ReturnValue,"get-user");
+        AssociatedEvaluator.AddGeneric<GetPath>(ReturnValue,"get-path");
+
+
         AssociatedEvaluator.AddGeneric<GetPath>(ReturnValue,"get-path");
 
         AssociatedEvaluator.AddType<DatabaseDefinition>(ReturnValue,"db-def_t");

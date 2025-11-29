@@ -153,7 +153,6 @@ namespace MBChat2
         Hash DatabaseID;
         uint64_t Timestamp = 0;
         std::string Type;
-
         std::vector<Hash> ForkedDatabase;
         std::vector<Hash> Participants;
 
