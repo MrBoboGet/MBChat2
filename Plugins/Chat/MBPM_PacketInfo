@@ -1,0 +1,7 @@
+{
+	"PacketName":"MBChat_Chat",
+    "PacketType":"mbchat_plugin",
+	"Attributes":[],
+    "SubPackets":[],
+    "Dependancies":[]
+}

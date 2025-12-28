@@ -1,0 +1,12 @@
+{
+    "PacketType": "mbchat_plugin",
+    "Mounts":
+    [
+        {
+            "Base":"Home",
+            "PacketPath":"/",
+            "NameSuffix":true,
+            "MountPrefix":"/.mbchat/plugins"
+        }
+    ]
+}

@@ -1004,7 +1004,7 @@ namespace MBChat2
         for(auto const& Row : Rows)
         {
             OutHeader.HeaderHash = ResourceID;
-            OutHeader.Type = ContentType(std::get<MBDB::IntType>(Row["ContentType"]));
+            OutHeader.Type = std::get<std::string>(Row["ContentType"]);
             OutHeader.UpType = UploadType(std::get<MBDB::IntType>(Row["UpType"]));
             OutHeader.TimeStamp = std::get<MBDB::IntType>(Row["Time"]);
             OutHeader.ContentSize = std::get<MBDB::IntType>(Row["ContentSize"]);
@@ -1048,7 +1048,7 @@ namespace MBChat2
                                 {
                                     ResourceResponse Content;
                                     Content.Header.HeaderHash = StringToID(std::get<std::string>(Row["Hash"]));
-                                    Content.Header.Type = ContentType( std::get<int64_t>(Row["ContentType"]));
+                                    Content.Header.Type =  std::get<int64_t>(Row["ContentType"]);
                                     Content.Header.UpType = UploadType( std::get<int64_t>(Row["UpType"]));
                                     Content.Header.TimeStamp =  std::get<int64_t>(Row["Timestamp"]);
                                     Content.Header.ContentSize =  std::get<int64_t>(Row["ContentSize"]);

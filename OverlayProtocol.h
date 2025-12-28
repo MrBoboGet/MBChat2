@@ -74,7 +74,7 @@ namespace MBChat2
 
     enum class ContentType : uint32_t
     {
-        Text
+        Text,
     };
     enum class UploadType : uint32_t
     {
@@ -173,7 +173,7 @@ namespace MBChat2
     struct ResourceHeader : public MessageBase<MessageType::ResourceHeader>
     {
         Hash HeaderHash;
-        ContentType Type = ContentType::Text;
+        std::string Type;
         UploadType UpType = UploadType::New;
         uint64_t TimeStamp = 0;
         uint64_t ContentSize = 0;
@@ -270,7 +270,7 @@ namespace MBChat2
     };
     struct ResourceContent
     {
-        ContentType Type = ContentType::Text;
+        std::string Type;
         UploadType UpType = UploadType::New;
         Hash ParentHash;
         std::string Name;
@@ -278,7 +278,7 @@ namespace MBChat2
     };
     struct PublishableResourceHeader
     {
-        ContentType Type = ContentType::Text;
+        std::string Type;
         UploadType UpType = UploadType::New;
         Hash DatabaseHash;
         Hash ParentHash;

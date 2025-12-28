@@ -11,6 +11,7 @@ namespace MBChat2
     struct ResourceHandle
     {
         ID Id;
+        std::string Type;
         std::vector<std::string> Path;
     };
 
