@@ -343,60 +343,52 @@ namespace MBChat2
         }
     };
 
+    class ConnectionManager;
+    class ResourceStateHandle
+    {
+        friend class ConnectionManager;
+        ConnectionManager* m_ConnectionManager = nullptr;
+        ID m_ResourceID;
+        ID m_DatabaseID;
+        uint32_t m_ObserverID = 0;
+    public:
+        ResourceStateHandle() = default;
+        ResourceStateHandle(ResourceStateHandle&&) = default;
+        ResourceStateHandle& operator=(ResourceStateHandle&&) = default;
+        ResourceStateHandle(ResourceStateHandle const&) = default;
+
+        ID const& GetResourceID()
+        {
+            return m_ResourceID;   
+        }
+        ID const& GetDatabaseID()
+        {
+            return m_DatabaseID;   
+        }
+        float DownloadPercent();
+        ResourceHeader GetHeader();
+        bool HeaderAvailable();
+        Task<int> StartDownload();
+        Task<std::optional<ResourceHeader>> FetchHeader();
+        void SetOnStateChanged(MBUtility::MOFunction<void()> OnStateChangedCallback);
+        ~ResourceStateHandle();
+    };
+
+
+    struct DatabaseSettings
+    {
+        std::string DatabasePath;
+        std::filesystem::path ResourceDirectory;
+    };
+
     class ConnectionManager
     {
         struct SharedState;
+        friend class ResourceStateHandle;
 
         template<typename T>
         struct OnErrorTag {};
             
-        //template<typename T>
-        //class Task : public  std::enable_shared_from_this<T>
-        //{
-        //    std::shared_ptr<SharedState> m_State;
-        //    std::mutex m_InternalLock;
-        //protected:
-        //    std::unique_lock<std::mutex> GetLock()
-        //    {
-        //        return std::unique_lock<std::mutex>(m_InternalLock);
-        //    }
-        //public:
-        //    SharedState& GetState()
-        //    {
-        //        return *m_State;   
-        //    }
-        //    void SetSharedState(std::shared_ptr<SharedState> State)
-        //    {
-        //        m_State = std::move(State);   
-        //    }
-
-        //    template<typename R>
-        //    std::enable_if_t<std::is_base_of_v<UDPRequest_,R>>
-        //        SendRequest(PeerInfo const& Peer,R Message)
-        //    {
-        //        typedef typename R::ResponseType Result;
-        //        auto Future = GetState().UDP->SendRequest(Peer,Message);
-        //        Future.Then([Obj=this->shared_from_this()](Result Res)
-        //                {
-        //                    (*Obj)(Res);
-        //                });
-        //        Future.OnError([Obj=this->shared_from_this(),Msg = std::move(Message)]()
-        //                {
-        //                    (*Obj)(Msg);
-        //                });
-        //    }
-
-        //    template<typename... Args>
-        //    MBUtility::MOFunction<void(Args...)> MakeCallback()
-        //    {
-        //        return [This=this->shared_from_this()](Args... Arguments) mutable
-        //        {
-        //            (*This)(std::forward<Args>(Arguments)...);
-        //        };
-        //    }
-        //};
-
-        //advertices these subscriptions with regular intervalls
         struct SharedState : public std::enable_shared_from_this<SharedState>
         {
             std::mutex StateMutex;
@@ -408,12 +400,30 @@ namespace MBChat2
 
             //not needing mutex
             MBDB::MrBoboDatabase DB;
+            DatabaseSettings Settings;
             MBUtility::ThreadPool ThreadPool;
             std::unique_ptr<UDPHandler> UDP;
 
             ResourceCallback ResourceRecievedCallback;
             RPCHandler RPCCallback;
             AsyncUDPMapper PortMapper;
+
+            struct ResourceStateObserver
+            {
+                MBUtility::MOFunction<void()> Callback;
+            };
+
+            struct ActiveDownloadState
+            {
+                std::atomic<uint64_t> TotalBytes = 0;
+                std::atomic<uint64_t> RecievedBytes = 0;
+            };
+            std::unordered_map<std::string,std::shared_ptr<ActiveDownloadState>> ActiveDownloads;
+
+            std::mutex ObserverMutex;
+            std::atomic<uint32_t> CurrentObserverID{1};
+            std::unordered_map<std::string,std::unordered_map<uint32_t,std::shared_ptr<ResourceStateObserver>>> m_StateObservers;
+
 
             std::vector<PeerInfo> GetClosestPeers(ID const&,int k);
             std::vector<PeerInfo> GetClosestPeers(ID const& TargetID,ID const& DatabaseID,int k);
@@ -444,10 +454,10 @@ namespace MBChat2
             MessageCallback GetTCPMessageHandler();
 
 
-            SharedState(std::string const& DatabasePath)
-                : DB(DatabasePath,MBDB::DBOpenOptions::ReadWrite)
+            SharedState(DatabaseSettings NewSettings)
+                : DB(NewSettings.DatabasePath,MBDB::DBOpenOptions::ReadWrite)
             {
-                   
+                Settings = std::move(NewSettings);
             }
         };
 
@@ -475,10 +485,10 @@ namespace MBChat2
             auto const& AcceptedConnection = Result.value();
             ConnectionParameters Params;
             Params.IP = TargetPeer.IP;
-            Params.PeerPort = AcceptedConnection.HostPort;
+            Params.PeerPort = AcceptedConnection.second.HostPort;
             Params.LocalPort = m_Request.HostPort;
             Params.PeerID.Content = IDToString(TargetPeer.ID.Content);
-            m_UDPConnection->SetDstPort(AcceptedConnection.HostPort);
+            m_UDPConnection->SetDstPort(AcceptedConnection.second.HostPort);
             auto NewConnection = std::make_shared<Connection>(
                     std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
                     std::move(Params),
@@ -496,9 +506,6 @@ namespace MBChat2
             }
             co_return NewConnection;
         }
-
-
-
         Task<std::vector<PeerInfo>> GetClosestPeers(ID const& ID)
         {
             FindPeerRequest Request;
@@ -506,7 +513,6 @@ namespace MBChat2
             Request.PeerID.Content = ID;
             return GetClosestPeers(std::move(Request));
         }
-
         Task<std::vector<PeerInfo>> GetClosestPeers(FindPeerRequest PeerRequest)
         {
             int k = 30;
@@ -537,7 +543,7 @@ namespace MBChat2
                 {
                     continue;   
                 }
-                auto& Response = Result.value();
+                auto& Response = Result.value().second;
                 if(Response.Peers.size()  > 0)
                 {
                     std::sort(Response.Peers.begin(),Response.Peers.end(),m_IDSorter);
@@ -573,6 +579,75 @@ namespace MBChat2
                 }
             }
             co_return m_ClosestPeers;
+        }
+        struct FetchHeaderResult
+        {
+            ResourceHeader Header;
+            PeerInfo Peer;
+        };
+        Task<std::optional<FetchHeaderResult>> FetchResourceHeader(GetResourceHeader PeerRequest)
+        {
+            int k = 30;
+            size_t ReplicationCount = 3;
+            IDSorter m_MinHeapSorter(PeerRequest.ResourceID.Content,false);
+            IDSorter m_IDSorter(PeerRequest.ResourceID.Content);
+            std::unordered_set<std::string> m_ContactedPeers;
+            std::vector<PeerInfo> m_ClosestPeers;
+            m_ClosestPeers = m_State->GetClosestPeers(PeerRequest.ResourceID.Content,PeerRequest.DatabaseID.Content,10);
+
+            UDPTaskQueue<GetResourceHeader_Response> ActiveTasks;
+            for(size_t i = 0; i < std::min(m_ClosestPeers.size(),ReplicationCount);i++)
+            {
+                ActiveTasks.AddTask(m_State->UDP->SendRequest(m_ClosestPeers[i],PeerRequest));
+            }
+            std::make_heap(m_ClosestPeers.begin(),m_ClosestPeers.end(),m_MinHeapSorter);
+            while(ActiveTasks.size() > 0)
+            {
+                auto Result = co_await ActiveTasks;
+                if(!Result.has_value())
+                {
+                    continue;   
+                }
+                auto& Response = Result.value();
+                //TODO verify header...
+                if(Response.second.Header.IsInitalized())
+                {
+                    FetchHeaderResult ReturnValue;
+                    ReturnValue.Header = std::move(Response.second.Header.Value());
+                    ReturnValue.Peer = Result.value().first;
+                    co_return ReturnValue;
+                }
+                if(Response.second.CloserPeers.size()  > 0)
+                {
+                    std::sort(Response.second.CloserPeers.begin(),Response.second.CloserPeers.end(),m_IDSorter);
+                    auto PreviousClosest = m_ClosestPeers.front();
+                    int NewRequests = 0;
+                    for(auto const& Peer : Response.second.CloserPeers)
+                    {
+                        if(!m_IDSorter(m_ClosestPeers.front().ID.Content,Peer.ID.Content))
+                        {
+                            break;
+                        }
+                        auto StringID = IDToString(Peer.ID.Content);
+                        if(m_ContactedPeers.find(StringID) == m_ContactedPeers.end())
+                        {
+                            m_ContactedPeers.insert(std::move(StringID));
+                            m_ClosestPeers.push_back(Peer);
+                            std::push_heap(m_ClosestPeers.begin(),m_ClosestPeers.end(),m_MinHeapSorter);
+                            //ar
+                            if(m_ClosestPeers.size() > k)
+                            {
+                                m_ClosestPeers.resize(k);
+                            }
+                            if(NewRequests < ReplicationCount)
+                            {
+                                ActiveTasks.AddTask(m_State->UDP->SendRequest(Peer,PeerRequest));
+                            }
+                        }
+                    }
+                }
+            }
+            co_return {};
         }
         Task<bool> SyncDB(std::vector<PeerInfo> Peers,ID DBID)
         {
@@ -614,9 +689,10 @@ namespace MBChat2
             co_return true;
         }
 
+        Task<bool> DownloadResource(ResourceHeader Resource,PeerInfo DownloadPeer);
         std::shared_ptr<SharedState> m_State;
     public:
-        ConnectionManager(IDParameters Params,uint16_t ListenPort,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback);
+        ConnectionManager(IDParameters Params,uint16_t ListenPort,DatabaseSettings Settings,ResourceCallback Callback,RPCHandler RPCCallback);
 
 
         //MBUtility::Future<std::shared_ptr<Connection>> 
@@ -628,9 +704,12 @@ namespace MBChat2
         void AddConnections(std::vector<PeerInfo> const& Peers);
         void AddConnection(PeerInfo Peer);
         ID PublishMessage(PublishableResourceHeader Message);
+        ID PublishFile(PublishableResourceHeader Message,std::filesystem::path const& Path,bool Copy=true);
         void RemoveResource(ID const& DBID,ID const& ResourceID);
         void RemoveResource(ID const& DBID,std::vector<std::string> const& Path);
         bool GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader);
+        ResourceStateHandle GetResourceStateHandle(ID const& DBID,ID const& ResourceID);
+
         //
 
         Task<std::optional<MBParsing::JSONObject>> SendPeerRPC(ID const& PeerID,MBParsing::JSONObject Object);

@@ -106,6 +106,8 @@ namespace MBChat2
         void AddCommandCompletion(std::string const& CommandName, CompletionFunc Func);
         void DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow);
         void OpenDatabase(ID const& DatabaseID);
+        void AddEvent(MBUtility::MOFunction<void()> Event);
+
         DatabaseDefinition CreateDatabase(DatabaseDefinition Definition);
         std::vector<DatabaseDefinition> GetDatabases();
 

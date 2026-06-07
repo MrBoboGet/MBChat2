@@ -216,6 +216,11 @@ namespace MBChat2
         {
             Parse(Stream,Value,0);
         }
+        template<typename T>
+        friend void operator&(T& Stream,ResourceHeader& Value)
+        {
+            Parse(Stream,Value,0);
+        }
     };
 
     struct Peer
@@ -464,9 +469,37 @@ namespace MBChat2
             }
         }
     };
+    struct GetResourceContent_Message : public MessageBase<MessageType::GetContent>
+    {
+        static constexpr MessageType TypeID = MessageType::GetContent;
+        ID DatabaseID;
+        ID ResourceID;
+        uint64_t Offset = 0;
+        uint64_t Length = 0;
+        template<typename T>
+        friend void Parse(T& Stream,GetResourceContent_Message& Value,uint16_t Version)
+        {
+            Stream & Value.DatabaseID;
+            Stream & Value.ResourceID;
+            Stream & Value.Offset;
+            Stream & Value.Length;
+        }
+    };
+    struct ResourceContentResponse : public MessageBase<MessageType::Content>
+    {
+        static constexpr MessageType TypeID = MessageType::Content;
+        bool HasContent = true;
+        std::string Content;
+        template<typename T>
+        friend void Parse(T& Stream,ResourceContentResponse& Value,uint16_t Version)
+        {
+            Stream & Value.HasContent;
+            Stream & Value.Content;
+        }
+    };
     //Messages
 
-    typedef MBUtility::StaticVariant<JSONRPC,GetResources,ResourceHeader> MessageContent;
+    typedef MBUtility::StaticVariant<JSONRPC,GetResources,GetResourceContent_Message,ResourceContentResponse,ResourceHeader> MessageContent;
    
     template<typename T>
     void Parse(T& Stream,MessageType Type,MessageContent& Value,uint16_t Version)
@@ -483,6 +516,15 @@ namespace MBChat2
         {
             Parse(Stream,Value.GetOrAssign<ResourceHeader>(),Version);
         }
+        else if(Type == MessageType::GetContent)
+        {
+            Parse(Stream,Value.GetOrAssign<GetResourceContent_Message>(),Version);
+        }
+        else if(Type == MessageType::Content)
+        {
+            Parse(Stream,Value.GetOrAssign<ResourceContentResponse>(),Version);
+        }
+
     }
     template<typename T,typename V>
     void Parse(T& Stream,std::vector<V>& Value,uint16_t Version)
@@ -530,16 +572,6 @@ namespace MBChat2
     {
 
         MessageHeader Header;
-        //template<typename T>
-        //void friend operator&(T& Stream,Message&& Rhs)
-        //{
-        //    Stream & Rhs.Version;
-        //    Stream & Rhs.Type;
-        //    Stream & Rhs.MessageID;
-        //    Stream & Rhs.ResponseID;
-        //    Stream & Rhs.MessageLength;
-        //    Stream & Rhs.Signature;
-        //    Parse(Stream,Rhs.Type,Rhs.Content);
         template<typename T>
         friend void ParseHeader(T& Stream,Message& Value)
         {

@@ -13,6 +13,30 @@ MBChat2::Task<int> GetInt(int Value)
     co_return co_await Multiply(Value,123);
 }
 
+namespace Test
+{
+    class TestClass
+    {
+           
+    };
+    template<typename T>
+    MBChat2::Task<int> operator co_await(T const&) requires std::is_base_of_v<TestClass,T>
+    {
+        return Multiply(1,1);
+    }
+}
+class TestClass2 : public Test::TestClass
+{
+       
+};
+
+MBChat2::Task<int> TestFunc(int Value)
+{
+    auto test = co_await Test::TestClass();
+    auto test2 = co_await TestClass2();
+    co_return co_await Multiply(Value,123);
+}
+
 
 MBChat2::Task<std::string> GetPrintString()
 {

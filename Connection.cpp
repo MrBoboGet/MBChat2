@@ -1,5 +1,6 @@
 #include "Connection.h"
 #include "OverlayProtocol.h"
+#include "UDPHandler.h"
 
 #include <MrBoboSockets/MrBoboSockets.h>
 
@@ -356,7 +357,6 @@ namespace MBChat2
     std::vector<std::string> ConnectionManager::SharedState::GetAbsoluteResourcePath
         (ID const& DBID,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
     {
-        std::vector<std::string> ReturnValue;
         std::vector<std::string> Parents;
         auto DB = &this->DB;
         auto GetParentStmt = DB->GetSQLStatement(
@@ -382,7 +382,8 @@ namespace MBChat2
             CurrentResource = StringToID(std::get<std::string>(ResourceRow["ParentHash"]));
         }
         GetPathID(DBID,Parents,OutParent,OutID);
-        return ReturnValue;
+        std::reverse(Parents.begin(),Parents.end());
+        return Parents;
     }
     std::vector<std::string> ConnectionManager::GetAbsoluteResourcePath(ID const& DB,ID const& Resource,MBDB::IntType& OutParent,MBDB::IntType& OutID)
     {
@@ -510,6 +511,53 @@ namespace MBChat2
         }
         return NotificationToSend.Header.HeaderHash.Content;
     }
+    ID ConnectionManager::PublishFile(PublishableResourceHeader PublishedMessage,std::filesystem::path const& Path,bool Copy)
+    {
+        NewMessage NotificationToSend;
+        NotificationToSend.Header.Type = PublishedMessage.Type;
+        NotificationToSend.Header.UpType = PublishedMessage.UpType;
+        NotificationToSend.Header.TimeStamp = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        NotificationToSend.Header.ContentSize = std::filesystem::file_size(Path);
+        NotificationToSend.Header.OriginalDatabaseHash = std::move(PublishedMessage.DatabaseHash);
+        NotificationToSend.Header.ParentHash = std::move(PublishedMessage.ParentHash);
+        NotificationToSend.Header.Name = std::move(PublishedMessage.Name);
+        NotificationToSend.Header.ContentHash = std::move(PublishedMessage.ContentHash);
+        NotificationToSend.Header.Uploader = m_State->HostID;
+        NotificationToSend.Header.HeaderHash = NotificationToSend.Header.CalculateHeaderHash();
+
+        std::filesystem::path FilePath = m_State->Settings.ResourceDirectory/
+            MBUtility::HexEncodeString(IDToString(NotificationToSend.Header.HeaderHash.Content));
+        if(Copy)
+        {
+            std::filesystem::copy(Path,FilePath);
+        }
+        else
+        {
+            std::filesystem::create_symlink(Path,FilePath);
+        }
+
+        m_State->AddResourceToDB(NotificationToSend.Header,NotificationToSend.Content);
+        std::vector<PeerInfo> DBPeers;
+        {
+            std::lock_guard Lock(m_State->StateMutex);
+            auto PeerIt = m_State->PeerSubscriptions.find(NotificationToSend.Header.OriginalDatabaseHash.Content);
+            if(PeerIt != m_State->PeerSubscriptions.end())
+            {
+                for(auto const& Peer : PeerIt->second)
+                {
+                    DBPeers.push_back(Peer);
+                }
+            }
+        }
+        for(auto const& Peer : DBPeers)
+        {
+            if(Peer.IP != 0)
+            {
+                m_State->UDP->SendNotification(Peer,NotificationToSend);
+            }
+        }
+        return NotificationToSend.Header.HeaderHash.Content;
+    }
     void ConnectionManager::RemoveResource(ID const& DBID,ID const& ResourceID)
     {
         m_State->RemoveResource(DBID,ResourceID);
@@ -521,6 +569,19 @@ namespace MBChat2
     bool ConnectionManager::GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader)
     {
         return m_State->GetResourceById(DBID,ResourceID,OutHeader);
+    }
+    ResourceStateHandle ConnectionManager::GetResourceStateHandle(ID const& DBID,ID const& ResourceID)
+    {
+        ResourceStateHandle ReturnValue;
+        ReturnValue.m_ResourceID = ResourceID;
+        ReturnValue.m_DatabaseID = DBID;
+        ReturnValue.m_ConnectionManager = this;
+        ReturnValue.m_ObserverID = m_State->CurrentObserverID.fetch_add(1);
+        {
+            std::lock_guard Lock(m_State->ObserverMutex);
+            m_State->m_StateObservers[IDToString(ResourceID)][ReturnValue.m_ObserverID] = std::make_shared<SharedState::ResourceStateObserver>();
+        }
+        return ReturnValue;
     }
 
 
@@ -770,6 +831,17 @@ namespace MBChat2
                 std::lock_guard InternalsLock(StateMutex);
                 PeerResponse.HostID = HostID;
             }
+        }
+        else if(Request.IsType<GetResourceHeader>())
+        {
+            auto const& HeaderRequest = Request.GetType<GetResourceHeader>();
+            auto& PeerResponse = Response.GetOrAssign<GetResourceHeader_Response>();
+            ResourceHeader Header;
+            if(GetResourceById(HeaderRequest.DatabaseID.Content,HeaderRequest.ResourceID.Content,Header))
+            {
+                PeerResponse.Header = std::move(Header);
+            }
+            PeerResponse.CloserPeers = GetClosestPeers(HeaderRequest.ResourceID.Content,HeaderRequest.DatabaseID.Content,3);
         }
         else if(Request.IsType<GetPeerKey>())
         {
@@ -1094,11 +1166,35 @@ namespace MBChat2
                         });
                 State->RPCCallback(Peer,Message.Content.GetType<JSONRPC>().Object,std::move(Promise));
             }
+            else if(Message.Content.IsType<GetResourceContent_Message>())
+            {
+                struct Message Response;
+                auto const& Request = Message.Content.GetType<GetResourceContent_Message>();
+                Response.Header.Type = MessageType::Content;
+                ResourceContentResponse& ResponseContent = Response.Content.GetOrAssign<ResourceContentResponse>();
+                auto It = State->ActiveConnections.find(Peer.ID.Content);
+                if(It != State->ActiveConnections.end())
+                {
+                    //TODO: ensure that an non-arbitray amount of bytes is handled...
+                    ResponseContent.HasContent = false;
+                    std::string Filename = MBUtility::HexEncodeString(IDToString(Request.ResourceID));
+                    std::filesystem::path ContentPath = State->Settings.ResourceDirectory/Filename;
+                    if(std::filesystem::exists(ContentPath))
+                    {
+                        ResponseContent.HasContent = true;
+                        ResponseContent.Content.resize(Request.Length);
+                        std::ifstream Input(ContentPath,std::ios::in|std::ios::binary);
+                        Input.seekg(Request.Offset);
+                        Input.read(ResponseContent.Content.data(),Request.Length);
+                    }
+                    It->second->SendResponse(Message.Header,Response);
+                }
+            }
         };
     }
-    ConnectionManager::ConnectionManager(IDParameters Params,uint16_t ListenPort,std::string const& DatabasePath,ResourceCallback Callback,RPCHandler RPCCallback)
+    ConnectionManager::ConnectionManager(IDParameters Params,uint16_t ListenPort,DatabaseSettings Settings,ResourceCallback Callback,RPCHandler RPCCallback)
     {
-        m_State = std::make_shared<SharedState>(DatabasePath);
+        m_State = std::make_shared<SharedState>(Settings);
         m_State->ResourceRecievedCallback = std::move(Callback);
         m_State->RPCCallback = std::move(RPCCallback);
         m_State->HostID.Content = Params.LocalID;
@@ -1290,4 +1386,147 @@ namespace MBChat2
         m_State->NewMappingConditional.notify_one();
         return true;
     }
+
+    Task<bool> ConnectionManager::DownloadResource(ResourceHeader Resource,PeerInfo DownloadPeer)
+    {
+        bool ReturnValue = false;
+        std::shared_ptr<SharedState::ActiveDownloadState> ActiveState = std::make_shared<SharedState::ActiveDownloadState>();
+        ActiveState->RecievedBytes.store(0);
+        ActiveState->TotalBytes.store(Resource.ContentSize);
+        {
+            std::lock_guard Lock(m_State->StateMutex);
+            if(m_State->ActiveDownloads.contains(IDToString(Resource.HeaderHash.Content)))
+            {
+                //TODO: handle some other way...
+                co_return true;
+            }
+            m_State->ActiveDownloads[IDToString(Resource.HeaderHash.Content)] = ActiveState;
+        }
+        auto ConnectionResult = co_await InitializeConnection(std::move(DownloadPeer));
+        if(!ConnectionResult.has_value())
+        {
+            co_return ReturnValue;
+        }
+        auto& Connection = ConnectionResult.value();
+        size_t RecievedBytes = 0;
+        const size_t ChunkSize = 16000;
+        std::string Filename = MBUtility::HexEncodeString(IDToString(Resource.HeaderHash.Content));
+        std::ofstream OutFile = std::ofstream(m_State->Settings.ResourceDirectory/Filename,std::ios::out|std::ios::binary);
+        while(RecievedBytes < Resource.ContentSize)
+        {
+            Message Request;
+            Request.Header.Type = MessageType::GetContent;
+            auto& Content = Request.Content.GetOrAssign<GetResourceContent_Message>();
+            Content.ResourceID = Resource.HeaderHash.Content;
+            Content.DatabaseID = Resource.OriginalDatabaseHash.Content;
+            Content.Offset = RecievedBytes;
+            auto CurrentChunkSize = std::min(ChunkSize,Resource.ContentSize-RecievedBytes);
+            Content.Length = CurrentChunkSize;
+            auto Response = co_await Connection->SendMessage(Request);
+            if(!Response.has_value())
+            {
+                co_return false;
+            }
+            auto const& ResponseContent = Response.value().second.Content.GetType<ResourceContentResponse>();
+            if(!ResponseContent.HasContent || ResponseContent.Content.size() != CurrentChunkSize)
+            {
+                co_return false;
+            }
+            OutFile << ResponseContent.Content;
+            RecievedBytes += CurrentChunkSize;
+            ActiveState->RecievedBytes.store(RecievedBytes);
+
+            {
+                std::lock_guard Lock(m_State->ObserverMutex);
+                for(auto& Observer : m_State->m_StateObservers[IDToString(Resource.HeaderHash.Content)])
+                {
+                    Observer.second->Callback();
+                }
+            }
+        }
+        co_return ReturnValue;
+    }
+
+
+    ///
+    float ResourceStateHandle::DownloadPercent()
+    {
+        std::lock_guard Lock(m_ConnectionManager->m_State->StateMutex);
+        if(auto It = m_ConnectionManager->m_State->ActiveDownloads.find(IDToString(m_ResourceID)); 
+                It != m_ConnectionManager->m_State->ActiveDownloads.end())
+        {
+            return It->second->RecievedBytes.load()/float(It->second->TotalBytes.load());
+        }
+        return 0;
+    }
+    ResourceHeader ResourceStateHandle::GetHeader()
+    {
+        ResourceHeader OutHeader;
+        m_ConnectionManager->GetResource(m_DatabaseID,m_ResourceID,OutHeader);
+        return OutHeader;
+    }
+    bool ResourceStateHandle::HeaderAvailable()
+    {
+        ResourceHeader OutHeader;
+        return m_ConnectionManager->GetResource(m_DatabaseID,m_ResourceID,OutHeader);
+    }
+    Task<int> ResourceStateHandle::StartDownload()
+    {
+        auto Func = [](ID ResourceID,ID DatabaseID,ConnectionManager* ConnectionManager) -> Task<int>
+        {
+            ResourceHeader OutHeader;
+            GetResourceHeader Request;
+            Request.ResourceID = ResourceID;
+            Request.DatabaseID = DatabaseID;
+            auto Res = co_await ConnectionManager->FetchResourceHeader(Request);
+            if(Res.has_value())
+            {
+                co_await ConnectionManager->DownloadResource(Res.value().Header,Res.value().Peer);
+            }
+            co_return {};
+        };
+        return Func(m_ResourceID,m_DatabaseID,m_ConnectionManager);
+    }
+    Task<std::optional<ResourceHeader>> ResourceStateHandle::FetchHeader()
+    {
+        if(m_ObserverID == 0)
+        {
+            throw std::runtime_error("Cannot FetchHeader on default constructed ResourceStateHandle");
+        }
+        ResourceHeader OutHeader;
+        GetResourceHeader Request;
+        auto Res = co_await m_ConnectionManager->FetchResourceHeader(Request);
+        if(Res.has_value())
+        {
+            co_return std::move(Res.value().Header);
+        }
+        co_return {};
+    }
+    void ResourceStateHandle::SetOnStateChanged(MBUtility::MOFunction<void()> OnStateChangedCallback)
+    {
+        if(m_ObserverID == 0)
+        {
+            throw std::runtime_error("Cannot set OnStateChanhged on default constructed ResourceStateHandle");
+        }
+        std::lock_guard Lock = std::lock_guard(m_ConnectionManager->m_State->ObserverMutex);
+        auto& Observer = m_ConnectionManager->m_State->m_StateObservers[IDToString(m_ResourceID)][m_ObserverID] = 
+            std::make_shared<ConnectionManager::SharedState::ResourceStateObserver>();
+        Observer->Callback = std::move(OnStateChangedCallback);
+    }
+    ResourceStateHandle::~ResourceStateHandle()
+    {
+        if(!m_ConnectionManager)
+        {
+            return;   
+        }
+        std::lock_guard Lock = std::lock_guard(m_ConnectionManager->m_State->ObserverMutex);
+        auto& IDObservers = m_ConnectionManager->m_State->m_StateObservers[IDToString(m_ResourceID)];
+        IDObservers.erase(m_ObserverID);
+        if(IDObservers.size() == 0)
+        {
+            m_ConnectionManager->m_State->m_StateObservers.erase(IDToString(m_ResourceID));
+        }
+    }
+
+    ///
 }

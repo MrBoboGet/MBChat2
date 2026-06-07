@@ -21,9 +21,17 @@ namespace MBChat2
     void LispVisualiser::ResourcePublished(NewMessage const& NewHeader) 
     {
         auto& Evaluator = m_UnderylingWindow.GetEvaluator();
+        ResourceHandle Handle;
+        Handle.Id = NewHeader.Header.HeaderHash.Content;
+        Handle.Type = NewHeader.Header.Type;
+
+        auto Connection = GetConnectionPtr();
+        Handle.Path = Connection->GetAbsoluteResourcePath(Handle.Id);
+
+
         auto Result = Evaluator.Eval(
                 m_ChatScope,Evaluator.GetValue(*m_ChatScope,"resource-published") ,
-                {m_UnderylingWindow.GetUnderylingValue(),MBLisp::Value::EmplaceExternal<NewMessage>(NewHeader)});
+                {m_UnderylingWindow.GetUnderylingValue(),MBLisp::Value::EmplaceExternal<ResourceHandle>(Handle)});
     }
     bool LispVisualiser::HandleInput(MBCLI::ConsoleInput const& Input)
     {
@@ -148,6 +156,39 @@ namespace MBChat2
     std::vector<std::string> GetPath(ResourceHandle const& Resource)
     {
         return Resource.Path;
+    }
+    MBLisp::String GetId(ResourceHandle const& Resource)
+    {
+        return IDToString(Resource.Id);
+    }
+    MBLisp::String GetPathString(ResourceHandle const& Resource)
+    {
+        MBLisp::String ReturnValue = "";
+        for(auto const& Part : Resource.Path)
+        {
+            ReturnValue += "/";
+            ReturnValue += Part;
+        }
+        return ReturnValue;
+    }
+
+
+    static ResourceStateHandle GetStateObserver(DBConnection& Connection,MBLisp::String const& ID)
+    {
+        return Connection.GetStateHandle(StringToID(ID));
+    }
+    static MBLisp::Float DownloadPercent(ResourceStateHandle& Handle)
+    {
+        return Handle.DownloadPercent();
+    }
+    static void StartDownload(ResourceStateHandle& Handle)
+    {
+        auto Task = Handle.StartDownload();
+        Task.resume();
+    }
+    static void OnStateChanged_ResourceHandle(ResourceStateHandle& Handle)
+    {
+
     }
 
     struct QueryPart
@@ -498,7 +539,7 @@ namespace MBChat2
     ResourceHandle AddResource_VectorPath(DBConnection& Connection,
             std::vector<std::string> const& Path,MBLisp::String const& Content)
     {
-        return AddResource_VectorPath(Connection,Path,Content);
+        return AddResource_VectorPath_Type(Connection,Path,Content,"");
     }
     ResourceHandle AddChild_Path_Type(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content,MBLisp::String const& Type)
     {
@@ -532,6 +573,40 @@ namespace MBChat2
     ResourceHandle AddChild_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Content)
     {
         return AddChild_Path_Type(Connection,Path,Content,"");
+    }
+    ResourceHandle UploadFile_Path_Type(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Filepath,MBLisp::String const& Type)
+    {
+        ResourceContent NewContent;
+        NewContent.Type = Type;
+        auto QueryParts = i_ParseQueryParts(Path);
+        if(QueryParts.size() == 0 || !std::all_of(QueryParts.begin(),QueryParts.end(),[](QueryPart const& Part)
+                    {return !Part.RecursiveAll && !Part.Wildcard;})  )
+        {
+            throw std::runtime_error("Error adding resource: invalid path \""+Path+"\"");
+        }
+        MBLisp::List Resources;
+        GetResource_Impl(Connection,Resources,QueryParts,Connection.GetDBID(),0);
+        if(Resources.size() != 1)
+        {
+            throw std::runtime_error("Error adding resource to specific path: directory query returned "+std::to_string(Resources.size())+" elements");
+        }
+        auto& Parent = Resources[0].GetType<ResourceHandle>();
+        NewContent.ParentHash.Content = Parent.Id;
+        bool Copy = true;
+        if(std::filesystem::file_size(Filepath) > 25*1000000)
+        {
+            Copy = false;
+        }
+        auto ID = Connection.UploadFile(std::move(NewContent),Filepath,Copy);
+        ResourceHandle Ret;
+        Ret.Path = Connection.GetAbsoluteResourcePath(ID);
+        Ret.Id = ID;
+        Ret.Type = Type;
+        return Ret;
+    }
+    ResourceHandle UploadFile_Path(DBConnection& Connection,MBLisp::String const& Path,MBLisp::String const& Filepath)
+    {
+        return UploadFile_Path_Type(Connection,Path,Filepath,"");
     }
 
     ResourceHandle AddResource_Parent(DBConnection& Connection,ResourceHandle const& Parent,MBLisp::String const& Name,MBLisp::String const& Content)
@@ -743,16 +818,35 @@ namespace MBChat2
         AssociatedEvaluator.AddGeneric<RemoveResource_Resource>(ReturnValue,"remove-resource");
         AssociatedEvaluator.AddGeneric<RemoveResource_Path>(ReturnValue,"remove-resource");
 
-
-
+        //state observers
+        AssociatedEvaluator.AddType<ResourceStateHandle>(ReturnValue,"resource-state-observer_t");
+        AssociatedEvaluator.AddGeneric<GetStateObserver>(ReturnValue,"get-state-observer");
+        AssociatedEvaluator.AddGeneric<DownloadPercent>(ReturnValue,"download-percent");
+        AssociatedEvaluator.AddGeneric<StartDownload>(ReturnValue,"start-download");
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"on-state-changed",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](ResourceStateHandle& Handle,MBLisp::Value Callable) mutable
+                {
+                    Handle.SetOnStateChanged([Client=Client,Evaluator=Evaluator,Callable=std::move(Callable)]()
+                            {
+                                Client->AddEvent([Evaluator=Evaluator,Callable=Callable]()
+                                        {
+                                            Evaluator->Eval(Callable,{});
+                                        });
+                            });
+                });
+        //
 
         AssociatedEvaluator.AddGeneric<AddChild_Path>(ReturnValue,"add-child");
         AssociatedEvaluator.AddGeneric<AddChild_Path_Type>(ReturnValue,"add-child");
+        AssociatedEvaluator.AddGeneric<UploadFile_Path>(ReturnValue,"upload-file");
+        AssociatedEvaluator.AddGeneric<UploadFile_Path_Type>(ReturnValue,"upload-file");
 
         AssociatedEvaluator.AddGeneric<GetContent>(ReturnValue,"get-content");
         AssociatedEvaluator.AddGeneric<GetUser>(ReturnValue,"get-user");
         AssociatedEvaluator.AddGeneric<GetType>(ReturnValue,"get-type");
         AssociatedEvaluator.AddGeneric<GetPath>(ReturnValue,"get-path");
+        AssociatedEvaluator.AddGeneric<GetId>(ReturnValue,"get-id");
+        AssociatedEvaluator.AddGeneric<GetPathString>(ReturnValue,"get-path-string");
 
 
         AssociatedEvaluator.AddType<DatabaseDefinition>(ReturnValue,"db-def_t");

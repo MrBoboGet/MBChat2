@@ -123,8 +123,8 @@ namespace MBChat2
         friend void Parse(T& Stream,GetResourceHeader_Response& Value)
         {
             Stream & type;
-            Parse(Stream,Value.Header);
-            Parse(Stream,Value.CloserPeers);
+            Stream & Value.Header;
+            Stream & Value.CloserPeers;
         }
     };
     struct GetResourceHeader : public Request<3,GetResourceHeader_Response>
@@ -135,8 +135,8 @@ namespace MBChat2
         friend void Parse(T& Stream,GetResourceHeader& Value)
         {
             Stream & type;
-            Parse(Stream,Value.ResourceID);
-            Parse(Stream,Value.DatabaseID);
+            Stream & Value.ResourceID;
+            Stream & Value.DatabaseID;
         }
     };
     struct GetResourceContent_Response : public Response<4>
@@ -235,8 +235,8 @@ namespace MBChat2
 
 
     typedef MBUtility::StaticVariant<NewMessage,DBSubscriber> UDPNotification;
-    typedef MBUtility::StaticVariant<FindPeerRequest,GetPeerKey,InitConnection,GetResourceContent> UDPRequest;
-    typedef MBUtility::StaticVariant<NoResponse,FindPeer_Response,GetPeerKey_Response,GetResourceContent_Response,InitConnection_Response,Ack> UDPResponse;
+    typedef MBUtility::StaticVariant<FindPeerRequest,GetPeerKey,InitConnection,GetResourceHeader,GetResourceContent> UDPRequest;
+    typedef MBUtility::StaticVariant<NoResponse,FindPeer_Response,GetPeerKey_Response,GetResourceHeader_Response,GetResourceContent_Response,InitConnection_Response,Ack> UDPResponse;
 
 
     template<typename StreamType,typename ValueType,typename Head,typename... Tail>
@@ -299,8 +299,7 @@ namespace MBChat2
             {
                 std::mutex StateMutex;
                 std::atomic<bool> Done{false};
-                //std::optional<T> Result;
-                MBUtility::Future<std::optional<T>> Result;
+                MBUtility::Future<std::optional<std::pair<PeerInfo,T>>> Result;
                 std::coroutine_handle<> Continuation;
             };
             UDPHandler& m_AssociatedHandler;
@@ -325,7 +324,7 @@ namespace MBChat2
                 m_SharedState->Continuation = Handle;
                 return true;
             }
-            std::optional<T> await_resume()
+            std::optional<std::pair<PeerInfo,T>> await_resume()
             {
                 std::lock_guard Lock(m_SharedState->StateMutex);
                 return std::move(m_SharedState->Result.Get());
@@ -416,12 +415,14 @@ namespace MBChat2
             Result.m_ID = NewMessage.ID;
             {
                 std::lock_guard Lock(m_StateMutex);
-                auto Promise = MBUtility::Promise<std::optional<ResponseType>>();
+                auto Promise = MBUtility::Promise<std::optional<std::pair<PeerInfo,ResponseType>>>();
                 Result.m_SharedState->Result = Promise.GetFuture();
                 m_ResponseCallbacks[Peer.IP][NewMessage.ID].Callback =
-                    [this,ResultState = Result.m_SharedState,Promise=std::move(Promise)] (UDPResponse const& Response) mutable
+                    [this,ResultState = Result.m_SharedState,Promise=std::move(Promise),Peer=Peer] 
+                            (UDPResponse const& Response) mutable
                 {
-                    m_RequestResponseRunner.AddTask([Response=std::move(Response),Promise=std::move(Promise),ResultState=std::move(ResultState)]() mutable
+                    m_RequestResponseRunner.AddTask(
+                            [Response=std::move(Response),Promise=std::move(Promise),Peer=Peer,ResultState=std::move(ResultState)]() mutable
                             {
                                 std::coroutine_handle<> Handle;
                                 {
@@ -429,11 +430,11 @@ namespace MBChat2
                                     ResultState->Done.store(true);
                                     if(Response.IsType<ResponseType>())
                                     {
-                                        Promise.SetValue(std::move(Response.GetType<ResponseType>()));
+                                        Promise.SetValue(std::move(std::make_pair(Peer,Response.GetType<ResponseType>())));
                                     }
                                     else
                                     {
-                                        Promise.SetValue(std::optional<ResponseType>());
+                                        Promise.SetValue(std::optional<std::pair<PeerInfo,ResponseType>>());
                                     }
                                     Handle = ResultState->Continuation;
                                 }
@@ -510,14 +511,13 @@ namespace MBChat2
             m_Continuation = Handle;
             return true;
         }
-        std::optional<T> await_resume()
+        std::optional<std::pair<PeerInfo,T>> await_resume()
         {
             std::lock_guard Lock(m_InternalsMutex);
             if(m_FinishedTasks.size() == 0)
             {
                 throw std::runtime_error("Invariant broken: await_resume called on UDPTaskQueue with no finished tasks");   
             }
-            //std::optional<T> ReturnValue = m_FinishedTasks.back().await_resume();
             auto ID = m_FinishedTasks.back();
             m_FinishedTasks.pop_back();
             m_FinishedCount.fetch_add(-1);
@@ -528,7 +528,7 @@ namespace MBChat2
             {
                 throw std::runtime_error("Error in UDPHandler: Task with invalid ID finished");
             }
-            std::optional<T> ReturnValue = It->second.await_resume();
+            std::optional<std::pair<PeerInfo,T>> ReturnValue = It->second.await_resume();
             m_StoredTasks.erase(It);
             return ReturnValue;
         }

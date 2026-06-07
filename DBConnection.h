@@ -26,13 +26,15 @@ namespace MBChat2
             m_DatabaseID = std::move(DatabaseID);
         }
         virtual ID UploadResource(ResourceContent NewResource);
+        virtual ID UploadFile(ResourceContent NewResource,std::filesystem::path const& AbsolutePath,bool Copy=true);
         virtual void RemoveResource(ID const& ResourceID);
         virtual void RemoveResource(std::vector<std::string> const& Path);
-
         virtual bool GetResourceByID(ID const& ID,ResourceHeader& OutResource);
+        virtual ResourceStateHandle GetStateHandle(ID const& ID);
 
 
         virtual std::vector<std::string> GetAbsoluteResourcePath(ID const& ResourceRoot,MBDB::IntType& ParentID,MBDB::IntType& OutID);
+        virtual std::vector<std::string> GetAbsoluteResourcePath(ID const& ResourceRoot);
         virtual ID LatestID();
         ID GetDBID()
         {

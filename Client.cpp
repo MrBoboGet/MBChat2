@@ -159,6 +159,10 @@ namespace MBChat2
         m_LayerHandleInput = true;
         m_TopLayerer.AddLayer(std::move(TopWindow));
     }
+    void Client::AddEvent(MBUtility::MOFunction<void()> Event)
+    {
+        p_AddEvent(std::move(Event));
+    }
     DatabaseDefinition Client::p_LoadDatabase(ID const& DBID)
     {
         DatabaseDefinition ReturnValue;
@@ -530,10 +534,17 @@ namespace MBChat2
         m_LocalID.resize(IDContent.size());
         std::memcpy(m_LocalID.data(),IDContent.data(),IDContent.size());
         IDParameters Params;
+        DatabaseSettings Settings;
+        Settings.DatabasePath = MBUnicode::PathToUTF8(DBPath);
+        Settings.ResourceDirectory = ConfigPath/"resources";
+        if(!std::filesystem::exists(Settings.ResourceDirectory))
+        {
+            std::filesystem::create_directories(Settings.ResourceDirectory);
+        }
         Params.LocalID = m_LocalID;
         m_ConnectionManager = std::make_shared<ConnectionManager>(Params,
                 Config.Port.Value(),
-                MBUnicode::PathToUTF8(DBPath),
+                std::move(Settings),
                 [&](NewMessage const& Resource ){p_ResourceRecievedHandler(Resource);},
                 [&](PeerInfo const&  Peer,MBParsing::JSONObject const& Object, MBUtility::Promise<MBParsing::JSONObject> Obj )
                     {p_RPCHandler(Peer,Object,std::move(Obj));}
@@ -629,20 +640,31 @@ namespace MBChat2
         //m_Terminal.PrintWindowBuffer(m_TopWindow.GetBuffer(),0,0);
         m_Terminal.WriteWindow(m_TopLayerer);
 
-
-
-
         while(ShouldRun)
         {
             auto NewInput = m_Terminal.GetNextEvent();
-
+            while(true)
             {
-                std::lock_guard Lock(m_InternalsMutex);
-                for(auto& Event : m_RecievedEvents)
+                decltype(m_RecievedEvents) CurrentEvents;
                 {
-                    Event();
+                    std::lock_guard Lock(m_InternalsMutex);
+                    std::swap(CurrentEvents,m_RecievedEvents);
                 }
-                m_RecievedEvents.clear();
+                if(CurrentEvents.size() == 0)
+                {
+                    break;   
+                }
+                try
+                {
+                    for(auto& Event : CurrentEvents)
+                    {
+                        Event();
+                    }
+                }
+                catch(std::exception const& e)
+                {
+                    p_DisplayError(e.what());
+                }
             }
             p_HandleEvent(NewInput);
             auto VisualiserUpdated = m_DBVisualiserWindow->Updated();
