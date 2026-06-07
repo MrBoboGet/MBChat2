@@ -1,0 +1,5 @@
+
+struct Config
+{
+    ?int Port = 1338;
+}
