@@ -685,6 +685,8 @@ namespace MBChat2
             Request.DBID.Value().Content = DBID;
             m_State->AddSubscription(DBID,m_State->HostInfo);
             auto ClosestPeers = co_await GetClosestPeers(std::move(Request));
+            ClosestPeers.erase(std::remove_if(ClosestPeers.begin(),ClosestPeers.end(),
+                        [&](PeerInfo const& Peer){return Peer.ID == m_State->HostInfo.ID; } ),ClosestPeers.end());
             auto SyncResult = co_await SyncDB(std::move(ClosestPeers),DBID);
             co_return true;
         }

@@ -14,7 +14,7 @@ namespace MBChat2
 {
     using MBParsing::operator&;
 
-    typedef uint64_t TimestampType;
+    typedef int64_t TimestampType;
 
     typedef std::vector<uint8_t> ID;
     enum class MessageType : uint32_t
