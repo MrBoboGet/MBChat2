@@ -247,7 +247,7 @@ namespace MBChat2
         ID  p_StringToID(std::string const& String);
 
         template<typename Func>
-        void p_FillClosest(IDSorter const& Sorter,TreeNode const& Node,std::vector<PeerInfo>& OutInfo,ID const& TargetID,int k,Func AcceptFunc) 
+        void p_FillClosest(IDSorter const& Sorter,TreeNode const& Node,std::vector<PeerInfo>& OutInfo,ID const& TargetID,int k,Func&& AcceptFunc) 
         {
                    
             if(OutInfo.size() >= k)
@@ -290,7 +290,7 @@ namespace MBChat2
     public:
         std::vector<PeerInfo> FindClosest(ID const& Key,int k);
         template<typename T>
-        std::vector<PeerInfo> FindClosest(ID const& Key,int k,T Func)
+        std::vector<PeerInfo> FindClosest(ID const& Key,int k,T&& Func)
         {
             std::vector<PeerInfo> ReturnValue;
             auto Sorter = IDSorter(Key);
