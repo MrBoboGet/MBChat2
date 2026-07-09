@@ -409,11 +409,11 @@ namespace MBChat2
         MBDB::SQLStatement ExplicitName = DB->GetSQLStatement(
                 "SELECT tree.ID,tree.ParentID,tree.ResourceID,tree.Name,resource.ContentType AS Type FROM ActiveTree tree INNER JOIN "
                 " Resources resource ON tree.ResourceID = resource.Hash AND tree.DatabaseID = resource.DatabaseHash "
-                " WHERE tree.ParentID = :ParentID AND tree.Name = :Name AND tree.DatabaseID = :DatabaseID ");
+                " WHERE tree.ParentID = :ParentID AND tree.Name = :Name AND tree.DatabaseID = :DatabaseID ORDER BY resource.Time ASC");
         MBDB::SQLStatement AllParent = DB->GetSQLStatement(
                 " SELECT tree.ID,tree.ParentID,tree.ResourceID,resource.ContentType AS Type,tree.Name FROM ActiveTree tree INNER JOIN Resources resource ON  "
                 " tree.ResourceID = resource.Hash AND tree.DatabaseID = resource.DatabaseHash "
-                " WHERE tree.ParentID = :ParentID AND tree.DatabaseID = :DatabaseID ");
+                " WHERE tree.ParentID = :ParentID AND tree.DatabaseID = :DatabaseID ORDER BY resource.Time ASC");
         MBDB::IntType ParentID = 0;
         MBDB::IntType OutID = 0;
         std::vector<std::string> ParentPath =  Connection.GetAbsoluteResourcePath(ResourceRoot,ParentID,OutID);
