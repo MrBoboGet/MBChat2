@@ -671,7 +671,7 @@ namespace MBChat2
     std::vector<PeerInfo> ConnectionManager::SharedState::GetClosestPeers(ID const& ID,int k)
     {
         std::lock_guard Lock(StateMutex);
-        return Peers.FindClosest(ID,k);
+        return Peers.FindClosest(ID,k,[&](PeerInfo const& Peer){return Peer.ID != HostInfo.ID;} );
     }
     std::vector<PeerInfo> ConnectionManager::SharedState::GetClosestPeers(ID const& TargetID,ID const& DatabaseID,int k)
     {
@@ -683,7 +683,8 @@ namespace MBChat2
         }
         else
         {
-            return Peers.FindClosest(TargetID,k,[&](PeerInfo const& Peer){return It->second.find(Peer) != It->second.end();});
+            return Peers.FindClosest(TargetID,k,[&](PeerInfo const& Peer)
+                    {return It->second.find(Peer) != It->second.end() && HostInfo.ID != Peer.ID;});
         }
         return {};
     }
