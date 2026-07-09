@@ -1120,9 +1120,9 @@ namespace MBChat2
                                 {
                                     ResourceResponse Content;
                                     Content.Header.HeaderHash = StringToID(std::get<std::string>(Row["Hash"]));
-                                    Content.Header.Type =  std::get<int64_t>(Row["ContentType"]);
+                                    Content.Header.Type =  std::get<std::string>(Row["ContentType"]);
                                     Content.Header.UpType = UploadType( std::get<int64_t>(Row["UpType"]));
-                                    Content.Header.TimeStamp =  std::get<int64_t>(Row["Timestamp"]);
+                                    Content.Header.TimeStamp =  std::get<int64_t>(Row["Time"]);
                                     Content.Header.ContentSize =  std::get<int64_t>(Row["ContentSize"]);
                                     Content.Header.OriginalDatabaseHash = StringToID(std::get<std::string>(Row["DatabaseHash"]));
                                     Content.Header.ContentHash = StringToID(std::get<std::string>(Row["ContentHash"]));
