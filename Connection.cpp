@@ -63,7 +63,6 @@ namespace MBChat2
         }
         catch(...)
         {
-            int hej = 2;
         }
         State->Stopping.store(true);
         State->Transport->Abort();
@@ -117,6 +116,9 @@ namespace MBChat2
                         auto& StreamedMessage = QueuedMessage.MessageToSend.GetType<StreamedResponseMessage>();
                         ((MBUtility::MBOctetOutputStream&) *State->Transport) & StreamedMessage.Header;
                         StreamedMessage.Handler( (MBUtility::MBOctetOutputStream&)*State->Transport);
+                    }
+                    else
+                    {
                     }
                 }
             }
@@ -301,7 +303,10 @@ namespace MBChat2
     {
         if(Left == nullptr && Content.size() < k)
         {
-            Content.push_back(NewPeer);
+            if(std::find(Content.begin(),Content.end(),NewPeer) == Content.end())
+            {
+                Content.push_back(NewPeer);
+            }
             return;
         }
         if(Left == nullptr)
@@ -1049,7 +1054,9 @@ namespace MBChat2
         {
             std::lock_guard Lock(StateMutex);
             PeerSubscriptions[DatabaseID].insert(PeerInfo);
+            Peers.AddPeer(PeerInfo);
         }
+
         auto Stmt = DB.GetSQLStatement("INSERT INTO Subscriptions(PeerID,DatabaseID) VALUES (:PeerID,:DatabaseID)");
         Stmt.BindBlob("PeerID",PeerInfo.ID.Content);
         Stmt.BindBlob("DatabaseID",DatabaseID);

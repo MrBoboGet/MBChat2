@@ -458,86 +458,82 @@ namespace MBChat2
     class UDPTaskQueue
     {
         typedef UDPHandler::UDPTask<T> TaskType;
-        
-        std::mutex m_InternalsMutex;
-        std::atomic<int> m_Size{0};
-        std::atomic<int> m_FinishedCount{0};
-        std::unordered_map<uint32_t,TaskType> m_StoredTasks;
-        std::vector<uint32_t> m_FinishedTasks;
-        std::coroutine_handle<> m_Continuation;
-
-
+        struct UDPTaskQueueState
+        {
+            std::mutex m_InternalsMutex;
+            std::atomic<int> m_Size{0};
+            std::atomic<int> m_FinishedCount{0};
+            std::unordered_map<uint32_t,TaskType> m_StoredTasks;
+            std::vector<uint32_t> m_FinishedTasks;
+            std::coroutine_handle<> m_Continuation;
+        };
+        std::shared_ptr<UDPTaskQueueState> m_State = std::make_shared<UDPTaskQueueState>();
 
     public:
         size_t size() const
         {
-            return m_Size.load();
+            return m_State->m_Size.load();
         }
         void AddTask(TaskType NewTask)
         {
-            m_Size.fetch_add(1);
-            NewTask.m_SharedState->Result.Then([&Handler=NewTask.m_AssociatedHandler,this,Id = NewTask.m_ID](auto const& obj)
+            m_State->m_Size.fetch_add(1);
+            NewTask.m_SharedState->Result.Then([&Handler=NewTask.m_AssociatedHandler,State=m_State,Id = NewTask.m_ID](auto const& obj)
                     {
-                        std::lock_guard Lock(m_InternalsMutex);
-                        m_FinishedTasks.push_back(Id);
-                        m_FinishedCount.fetch_add(1);
-                        if(m_Continuation)
+                        std::lock_guard Lock(State->m_InternalsMutex);
+                        State->m_FinishedTasks.push_back(Id);
+                        State->m_FinishedCount.fetch_add(1);
+                        if(State->m_Continuation)
                         {
-                            Handler.m_RequestResponseRunner.AddTask([Continuation=m_Continuation]()
+                            Handler.m_RequestResponseRunner.AddTask([Continuation=State->m_Continuation]()
                                     {
                                         Continuation.resume();
                                     });
-                            m_Continuation = std::coroutine_handle<>();
-                        }
-                    });
-            std::lock_guard Lock(m_InternalsMutex);
+                            State->m_Continuation = std::coroutine_handle<>();
+                        } });
+            std::lock_guard Lock(m_State->m_InternalsMutex);
             auto ID = NewTask.m_ID;
             //m_StoredTasks[ID] = std::move(NewTask);
-            m_StoredTasks.emplace(ID,std::move(NewTask));
+            m_State->m_StoredTasks.emplace(ID,std::move(NewTask));
         }
 
 
         bool await_ready()
         {
-            return m_FinishedCount.load() > 0;
+            return m_State->m_FinishedCount.load() > 0;
         }
         bool await_suspend(std::coroutine_handle<> Handle)
         {
-            std::lock_guard Lock(m_InternalsMutex);
-            if(m_FinishedTasks.size() > 0)
+            std::lock_guard Lock(m_State->m_InternalsMutex);
+            if(m_State->m_FinishedTasks.size() > 0)
             {
                 return false;
             }
-            m_Continuation = Handle;
+            m_State->m_Continuation = Handle;
             return true;
         }
         std::optional<std::pair<PeerInfo,T>> await_resume()
         {
-            std::lock_guard Lock(m_InternalsMutex);
-            if(m_FinishedTasks.size() == 0)
+            std::lock_guard Lock(m_State->m_InternalsMutex);
+            if(m_State->m_FinishedTasks.size() == 0)
             {
                 throw std::runtime_error("Invariant broken: await_resume called on UDPTaskQueue with no finished tasks");   
             }
-            auto ID = m_FinishedTasks.back();
-            m_FinishedTasks.pop_back();
-            m_FinishedCount.fetch_add(-1);
-            m_Size.fetch_add(-1);
+            auto ID = m_State->m_FinishedTasks.back();
+            m_State->m_FinishedTasks.pop_back();
+            m_State->m_FinishedCount.fetch_add(-1);
+            m_State->m_Size.fetch_add(-1);
 
-            auto It = m_StoredTasks.find(ID);
-            if(It == m_StoredTasks.end())
+            auto It = m_State->m_StoredTasks.find(ID);
+            if(It == m_State->m_StoredTasks.end())
             {
                 throw std::runtime_error("Error in UDPHandler: Task with invalid ID finished");
             }
             std::optional<std::pair<PeerInfo,T>> ReturnValue = It->second.await_resume();
-            m_StoredTasks.erase(It);
+            m_State->m_StoredTasks.erase(It);
             return ReturnValue;
         }
         ~UDPTaskQueue()
         {
-            if(m_Size.load() > 0)
-            {
-                assert(false && "Cannot destroy UDPTaskQueue without finishing all tasks!");
-            }
         }
     };
 }
