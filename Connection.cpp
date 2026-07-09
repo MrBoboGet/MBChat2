@@ -1134,6 +1134,7 @@ namespace MBChat2
                                     Content.Header.ContentSize =  std::get<int64_t>(Row["ContentSize"]);
                                     Content.Header.OriginalDatabaseHash = StringToID(std::get<std::string>(Row["DatabaseHash"]));
                                     Content.Header.ContentHash = StringToID(std::get<std::string>(Row["ContentHash"]));
+                                    Content.Header.ParentHash = StringToID(std::get<std::string>(Row["ParentHash"]));
                                     Content.Header.Uploader.Content = StringToID(std::get<std::string>(Row["UploaderID"]));
                                     Content.Header.Sig.Content = std::get<std::string>(Row["Signature"]);
 
