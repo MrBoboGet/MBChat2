@@ -34,7 +34,7 @@ namespace MBChat2
         uint16_t LocalPort = 0;
     };
     class Connection;
-    typedef MBUtility::MOFunction<void(PeerInfo const&, Message const&)> MessageCallback;
+    typedef MBUtility::MOFunction<void(PeerInfo const&,uint64_t ConnectionID, Message const&)> MessageCallback;
     typedef MBUtility::MOFunction<void(NewMessage const&)> ResourceCallback;
     typedef MBUtility::MOFunction<void(PeerInfo const&,MBParsing::JSONObject,MBUtility::Promise<MBParsing::JSONObject>)> RPCHandler;
     typedef MBUtility::MOFunction<void (MBUtility::MBOctetOutputStream&)> StreamedResponseHandler;
@@ -60,7 +60,7 @@ namespace MBChat2
         struct State
         {
             PeerInfo Peer;
-
+            uint64_t ConnectionID = 0;
             std::unique_ptr<MBTCP::MBTCP> Transport;
             std::atomic<bool> Stopping;
             std::thread ReadThread;
@@ -87,7 +87,7 @@ namespace MBChat2
     public:
         ~Connection();
 
-       Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> PacketStream,ConnectionParameters Params,PeerInfo Peer,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
+       Connection(std::unique_ptr<MBUtility::BidirectionalPacketStream> PacketStream,ConnectionParameters Params,PeerInfo Peer,uint64_t ConnectionID,MessageCallback MessageHandler,MBUtility::MOFunction<void(ConnectionParameters const&)> QuitHandler);
 
 
         void SendResponse(MessageHeader const& RecievedMessage,Message Response);
@@ -137,10 +137,6 @@ namespace MBChat2
             m_SharedState->SendConditional.notify_one();
             return ReturnValue;
         }
-
-        //handles messages not sent from a response, such as peer requets and notifications
-        //void SetMessageHandler(MessageCallback Callback);
-        //void AddOnCloseHandler(std::function<void(PeerParameters const&)> Callback);
     };
 
     struct  IDParameters
@@ -395,7 +391,8 @@ namespace MBChat2
             Hash HostID;
             PeerInfo HostInfo;
             KademliaTree Peers;
-            std::unordered_map<ID,std::shared_ptr<Connection>> ActiveConnections;
+            std::atomic<uint64_t> NextConnectionID{0};
+            std::unordered_map<ID,std::unordered_map<uint64_t,std::shared_ptr<Connection>>> ActiveConnections;
             std::unordered_map<ID,std::unordered_set<PeerInfo>> PeerSubscriptions;
 
             //not needing mutex
@@ -467,14 +464,15 @@ namespace MBChat2
             {
                 std::lock_guard Lock(m_State->StateMutex);
                 auto It = m_State->ActiveConnections.find(TargetPeer.ID.Content);
-                if(It != m_State->ActiveConnections.end())
+                if(It != m_State->ActiveConnections.end() && It->second.size() > 0)
                 {
-                    co_return It->second;
+                    co_return It->second.begin()->second;
                 }
             }
             m_Request.HostInfo = m_State->HostInfo;
             std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
             m_Request.HostPort = m_UDPConnection->GetBoundPort();
+            m_Request.ConnectionID = m_State->NextConnectionID.fetch_add(1);
 
             std::shared_ptr<Connection> m_ResultConnection;
             auto Result = co_await m_State->UDP->SendRequest(TargetPeer,m_Request);
@@ -493,16 +491,21 @@ namespace MBChat2
                     std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
                     std::move(Params),
                     TargetPeer,
+                    m_Request.ConnectionID,
                     m_State->GetTCPMessageHandler(),
-                    [State=m_State,ID=m_Request.HostInfo.ID.Content](ConnectionParameters const& Params) mutable {
+                    [State=m_State,ID=m_Request.HostInfo.ID.Content,ConnectionID = m_Request.ConnectionID](ConnectionParameters const& Params) mutable {
                         std::lock_guard Lock(State->StateMutex);
-                        State->ActiveConnections.erase(State->ActiveConnections.find(ID));
+                        auto It = State->ActiveConnections.find(ID);
+                        if(It != State->ActiveConnections.end())
+                        {
+                            It->second.erase(It->second.find(ConnectionID));
+                        }
                     });
 
 
             {
                 std::lock_guard StateLock = std::lock_guard(m_State->StateMutex);
-                m_State->ActiveConnections[TargetPeer.ID.Content] = NewConnection;
+                m_State->ActiveConnections[TargetPeer.ID.Content][m_Request.ConnectionID] = NewConnection;
             }
             co_return NewConnection;
         }

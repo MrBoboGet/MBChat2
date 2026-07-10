@@ -179,12 +179,14 @@ namespace MBChat2
     {
         PeerInfo HostInfo;
         uint16_t HostPort = 0;
+        uint64_t ConnectionID = 0;
         template<typename T>
         friend void Parse(T& Stream,InitConnection& Value)
         {
             Stream & type;
             Parse(Stream,Value.HostInfo);
             Stream & Value.HostPort;
+            Stream & Value.ConnectionID;
         }
     };
 
