@@ -928,11 +928,11 @@ namespace MBChat2
             auto const& Row = Resources.front();
             auto StoredInline = std::get<MBDB::IntType>(Row["StoredInline"]) != 0;
             auto StoredLocaly = std::get<MBDB::IntType>(Row["StoredLocaly"]) != 0;
-            if(!StoredLocaly)
+            if(!StoredLocaly && Content.size() == Header.ContentSize)
             {
                 //always store inline...
                 auto StoreStmt = DB.GetSQLStatement(
-                        "UPDATE Resources SET StoredLocaly = 1,StoredInlien = 1,Content=:Content WHERE Hash = :Hash AND DatabaseHash = :DBHash");
+                        "UPDATE Resources SET StoredLocaly = 1,StoredInline = 1,Content=:Content WHERE Hash = :Hash AND DatabaseHash = :DBHash");
                 StoreStmt.BindBlob("Hash",Header.HeaderHash.Content);
                 StoreStmt.BindBlob("DBHash",Header.OriginalDatabaseHash.Content);
                 StoreStmt.BindBlob("Content",Content);
