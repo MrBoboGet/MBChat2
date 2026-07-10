@@ -883,7 +883,7 @@ namespace MBChat2
                 if(PeerIt != ActiveConnections.end())
                 {
                     auto ConnectionIt = PeerIt->second.find(ConnectionRequset.ConnectionID);
-                    if(ConnectionIt == PeerIt->second.end())
+                    if(ConnectionIt != PeerIt->second.end())
                     {
                         ConnectionResponse.HostPort = ConnectionIt->second->GetLocalPort();
                     }
