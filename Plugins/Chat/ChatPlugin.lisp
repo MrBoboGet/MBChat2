@@ -57,7 +57,13 @@
 
 (defmethod download-file ((file File))
     (set :observer file (chat:get-state-observer :db file (hex-decode :id file)))
-    (chat:on-state-changed :observer file (lambda () (update file)))
+    (chat:on-state-changed :observer file 
+        (lambda () 
+            (if (eq (chat:download-percent :observer file) 100)
+                (setl :observer file null)
+            )
+            (update file))
+    )
     (chat:start-download :observer file)
     (update file)
 )

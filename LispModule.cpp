@@ -177,9 +177,9 @@ namespace MBChat2
     {
         return Connection.GetStateHandle(StringToID(ID));
     }
-    static MBLisp::Float DownloadPercent(ResourceStateHandle& Handle)
+    static MBLisp::Int DownloadPercent(ResourceStateHandle& Handle)
     {
-        return Handle.DownloadPercent();
+        return Handle.DownloadPercent() * 100;
     }
     static void StartDownload(ResourceStateHandle& Handle)
     {
