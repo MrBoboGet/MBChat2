@@ -155,6 +155,7 @@ namespace MBChat2
         MBUtility::Promise<std::optional<std::pair<PeerInfo,Message>>> Promise;
         auto ReturnValue = Promise.GetFuture();
 
+
         std::lock_guard Lock(m_SharedState->SendMutex);
         QueuedMessage& NewMessage = m_SharedState->QueuedMessages.emplace_back();
         NewMessage.MessageToSend = std::move(MessageToSend);
@@ -583,6 +584,13 @@ namespace MBChat2
         ReturnValue.m_ResourceID = ResourceID;
         ReturnValue.m_DatabaseID = DBID;
         ReturnValue.m_ConnectionManager = this;
+        ResourceHeader Resource;
+        if(m_State->GetResourceById(DBID,ResourceID,Resource)) 
+        {
+            ReturnValue.m_CompleteHeader = std::move(Resource);
+        }
+
+        //check if resource exists
         ReturnValue.m_ObserverID = m_State->CurrentObserverID.fetch_add(1);
         {
             std::lock_guard Lock(m_State->ObserverMutex);
@@ -1107,6 +1115,12 @@ namespace MBChat2
         }
         return Result;
     }
+    std::filesystem::path ConnectionManager::SharedState::GetLocalResourcePath(ID const& ResourceID)
+    {
+        std::string Filename = MBUtility::HexEncodeString(IDToString(ResourceID));
+        auto ReturnValue = Settings.ResourceDirectory/Filename;
+        return ReturnValue;
+    }
     MessageCallback ConnectionManager::SharedState::GetTCPMessageHandler()
     {
         return [State=shared_from_this()](PeerInfo const& Peer,uint64_t ConnectionID,Message const& Message)
@@ -1211,8 +1225,7 @@ namespace MBChat2
                 }
                 //TODO: ensure that an non-arbitray amount of bytes is handled...
                 ResponseContent.HasContent = false;
-                std::string Filename = MBUtility::HexEncodeString(IDToString(Request.ResourceID));
-                std::filesystem::path ContentPath = State->Settings.ResourceDirectory/Filename;
+                std::filesystem::path ContentPath = State->GetLocalResourcePath(Request.ResourceID);
                 if(std::filesystem::exists(ContentPath))
                 {
                     ResponseContent.HasContent = true;
@@ -1424,6 +1437,11 @@ namespace MBChat2
         return true;
     }
 
+    std::filesystem::path ConnectionManager::GetLocalResourcePath(ResourceHeader const& Header)
+    {
+        return m_State->GetLocalResourcePath(Header.HeaderHash.Content);
+    }
+
     Task<bool> ConnectionManager::DownloadResource(ResourceHeader Resource,PeerInfo DownloadPeer)
     {
         bool ReturnValue = false;
@@ -1445,10 +1463,11 @@ namespace MBChat2
             co_return ReturnValue;
         }
         auto& Connection = ConnectionResult.value();
-        size_t RecievedBytes = 0;
+        uint64_t RecievedBytes = 0;
         const size_t ChunkSize = 16000;
-        std::string Filename = MBUtility::HexEncodeString(IDToString(Resource.HeaderHash.Content));
-        std::ofstream OutFile = std::ofstream(m_State->Settings.ResourceDirectory/Filename,std::ios::out|std::ios::binary);
+        std::ofstream OutFile = std::ofstream(GetLocalResourcePath(Resource),std::ios::out|std::ios::binary);
+        int PreviousPercent = 0;
+        const int PercentIncrementThreshold = 5;
         while(RecievedBytes < Resource.ContentSize)
         {
             Message Request;
@@ -1472,13 +1491,22 @@ namespace MBChat2
             OutFile << ResponseContent.Content;
             RecievedBytes += CurrentChunkSize;
             ActiveState->RecievedBytes.store(RecievedBytes);
-
+            auto CurrentPercent = RecievedBytes * 100 / Resource.ContentSize;
+            if(CurrentPercent >= PreviousPercent + PercentIncrementThreshold)
             {
                 std::lock_guard Lock(m_State->ObserverMutex);
                 for(auto& Observer : m_State->m_StateObservers[IDToString(Resource.HeaderHash.Content)])
                 {
                     Observer.second->Callback();
                 }
+                PreviousPercent = CurrentPercent;
+            }
+        }
+        {
+            std::lock_guard Lock(m_State->ObserverMutex);
+            for(auto& Observer : m_State->m_StateObservers[IDToString(Resource.HeaderHash.Content)])
+            {
+                Observer.second->Callback();
             }
         }
         co_return ReturnValue;
@@ -1488,6 +1516,15 @@ namespace MBChat2
     ///
     float ResourceStateHandle::DownloadPercent()
     {
+        if(m_CompleteHeader.has_value())
+        {
+            auto Path = m_ConnectionManager->m_State->GetLocalResourcePath(m_ResourceID);
+            if(std::filesystem::exists(Path) && std::filesystem::file_size(Path) == m_CompleteHeader.value().ContentSize)
+            {
+                return 1;
+            }
+        }
+
         std::lock_guard Lock(m_ConnectionManager->m_State->StateMutex);
         if(auto It = m_ConnectionManager->m_State->ActiveDownloads.find(IDToString(m_ResourceID)); 
                 It != m_ConnectionManager->m_State->ActiveDownloads.end())
@@ -1543,7 +1580,7 @@ namespace MBChat2
     {
         if(m_ObserverID == 0)
         {
-            throw std::runtime_error("Cannot set OnStateChanhged on default constructed ResourceStateHandle");
+            throw std::runtime_error("Cannot set OnStateChanged on default constructed ResourceStateHandle");
         }
         std::lock_guard Lock = std::lock_guard(m_ConnectionManager->m_State->ObserverMutex);
         auto& Observer = m_ConnectionManager->m_State->m_StateObservers[IDToString(m_ResourceID)][m_ObserverID] = 

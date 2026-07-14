@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <optional>
 #include <MBUtility/Future.h>
+#include <assert.h>
 namespace MBChat2
 {
     template<typename T>
@@ -34,6 +35,10 @@ namespace MBChat2
                         {
                             m_ValuePtr = const_cast<T*>(&Value);
                             Handle.resume();
+                        }
+                        else
+                        {
+                            assert(false);
                         }
                     });
             Suspended->store(true);

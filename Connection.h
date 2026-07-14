@@ -347,6 +347,9 @@ namespace MBChat2
         ID m_ResourceID;
         ID m_DatabaseID;
         uint32_t m_ObserverID = 0;
+        //std::atomic<bool> m_StateHandled{false};
+        std::optional<ResourceHeader> m_CompleteHeader;
+
     public:
         ResourceStateHandle() = default;
         ResourceStateHandle(ResourceStateHandle&&) = default;
@@ -361,6 +364,14 @@ namespace MBChat2
         {
             return m_DatabaseID;   
         }
+        //void SetStateHandled()
+        //{
+        //    //m_StateHandled.store(false);   
+        //}
+        //bool StateHandled() const
+        //{
+        //    return m_StateHandled.load();   
+        //}
         float DownloadPercent();
         ResourceHeader GetHeader();
         bool HeaderAvailable();
@@ -447,6 +458,7 @@ namespace MBChat2
             void AddSubscription(ID const& DatabaseID,PeerInfo const& PeerInfo);
             //
             void AddJoinDBTask(ID const& DBID); 
+            std::filesystem::path GetLocalResourcePath(ID const& ResourceID);
 
             MessageCallback GetTCPMessageHandler();
 
@@ -714,7 +726,7 @@ namespace MBChat2
         void RemoveResource(ID const& DBID,std::vector<std::string> const& Path);
         bool GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader);
         ResourceStateHandle GetResourceStateHandle(ID const& DBID,ID const& ResourceID);
-
+        std::filesystem::path GetLocalResourcePath(ResourceHeader const& Header);
         //
 
         Task<std::optional<MBParsing::JSONObject>> SendPeerRPC(ID const& PeerID,MBParsing::JSONObject Object);
