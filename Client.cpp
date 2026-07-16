@@ -405,8 +405,6 @@ namespace MBChat2
         if(VisualisersInfo.Connection == nullptr)
         {
             std::shared_ptr<MBDB::MrBoboDatabase> NewDB = std::make_shared<MBDB::MrBoboDatabase>(MBUnicode::PathToUTF8(m_DBPath.lexically_normal()),MBDB::DBOpenOptions::ReadOnly);
-            //NewDB->Exec("ATTACH '"+MBUnicode::PathToUTF8(m_DBPath.lexically_normal())+"' AS Parent");
-            //NewDB->Exec("CREATE temp View Resources AS SELECT * FROM Parent.Resources");
             VisualisersInfo.Connection = std::make_shared<DBConnection>(m_ConnectionManager,m_LocalDB,Database.DatabaseID.Content);
         }
         m_VisualisedDB = Database.DatabaseID.Content;
@@ -415,6 +413,7 @@ namespace MBChat2
         NewVisualiser->Init();
         VisualisersInfo.Visualiser.emplace_back(std::move(NewVisualiser));
         m_DBVisualiserWindow->SetChild(*VisualisersInfo.Visualiser.back());
+        m_DBVisualiserWindow->SetUpdated(true);
         m_TopWindow.MoveRight();
     }
     void Client::p_AddEvent(MBUtility::MOFunction<void()> Event)

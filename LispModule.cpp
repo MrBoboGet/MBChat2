@@ -177,6 +177,10 @@ namespace MBChat2
     {
         return Connection.GetStateHandle(StringToID(ID));
     }
+    static MBLisp::String LocalPath(ResourceStateHandle& Connection)
+    {
+        return Connection.LocalPath();
+    }
     static MBLisp::Int DownloadPercent(ResourceStateHandle& Handle)
     {
         return Handle.DownloadPercent() * 100;
@@ -822,6 +826,7 @@ namespace MBChat2
         AssociatedEvaluator.AddType<ResourceStateHandle>(ReturnValue,"resource-state-observer_t");
         AssociatedEvaluator.AddGeneric<GetStateObserver>(ReturnValue,"get-state-observer");
         AssociatedEvaluator.AddGeneric<DownloadPercent>(ReturnValue,"download-percent");
+        AssociatedEvaluator.AddGeneric<LocalPath>(ReturnValue,"local-path");
         AssociatedEvaluator.AddGeneric<StartDownload>(ReturnValue,"start-download");
         AssociatedEvaluator.AddFunctionObject(ReturnValue,"on-state-changed",
                 [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](ResourceStateHandle& Handle,MBLisp::Value Callable) mutable

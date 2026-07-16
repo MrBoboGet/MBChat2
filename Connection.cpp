@@ -1441,6 +1441,10 @@ namespace MBChat2
     {
         return m_State->GetLocalResourcePath(Header.HeaderHash.Content);
     }
+    std::filesystem::path ConnectionManager::GetLocalResourcePath(ID const& ResourceID)
+    {
+        return m_State->GetLocalResourcePath(ResourceID);
+    }
 
     Task<bool> ConnectionManager::DownloadResource(ResourceHeader Resource,PeerInfo DownloadPeer)
     {
@@ -1532,6 +1536,10 @@ namespace MBChat2
             return It->second->RecievedBytes.load()/float(It->second->TotalBytes.load());
         }
         return 0;
+    }
+    std::string ResourceStateHandle::LocalPath()
+    {
+        return m_ConnectionManager->GetLocalResourcePath(m_ResourceID);
     }
     ResourceHeader ResourceStateHandle::GetHeader()
     {

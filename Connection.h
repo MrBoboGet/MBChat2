@@ -373,6 +373,7 @@ namespace MBChat2
         //    return m_StateHandled.load();   
         //}
         float DownloadPercent();
+        std::string LocalPath();
         ResourceHeader GetHeader();
         bool HeaderAvailable();
         Task<int> StartDownload();
@@ -727,6 +728,7 @@ namespace MBChat2
         bool GetResource(ID const& DBID,ID const& ResourceID,ResourceHeader& OutHeader);
         ResourceStateHandle GetResourceStateHandle(ID const& DBID,ID const& ResourceID);
         std::filesystem::path GetLocalResourcePath(ResourceHeader const& Header);
+        std::filesystem::path GetLocalResourcePath(ID const& ResourceID);
         //
 
         Task<std::optional<MBParsing::JSONObject>> SendPeerRPC(ID const& PeerID,MBParsing::JSONObject Object);

@@ -15,9 +15,11 @@
     (id "")
 )
 
+(set start-link (dynamic (lambda (a) null)))
+
 @tml
 <Chat Width="100%" >
-    <stacker @content passthrough="d" Width=Width>
+    <stacker @content passthrough="d,l" Width=Width>
 
     </stacker>
     <repl @input 
@@ -51,6 +53,13 @@
     }
     <Text content=(+ "[file: " :name this "] ") />
     <stacker justification="between" @status />
+    <modal @mod
+        orientation="center" 
+        height="50%" 
+        width="50%" 
+        >
+        
+    </modal>
 </File>
 
 (defmethod get-status-string ((this File))
@@ -59,9 +68,22 @@
 )
 
 
+(defmethod link-resource ((this Chat) (file File))
+    (set-window :mod this this 
+        @tml-emit
+        <filePicker height="100%" width="100%"  warn-replace=true
+                on-pick=(progn _(create-symlink (chat:local-path :observer file) _))
+            >
+        
+        </filePicker>
+    )
+)
 (defmethod handle-input ((this File) input)
     (if (eq input "d")
         (download-file this)
+        (return true)
+      else if (eq input "l")
+        (start-link this)
         (return true)
     )
 )
@@ -151,14 +173,12 @@
         (start-upload this)
         (return true)
      else if (ctrl input "i")
-        #(if (not (eq (get-selected-index :content this) -1))
-        #    (set-selected-index :content this 0)
-        #)
         (set-selected-index :content this (+ (child-count :content this) -1))
         (push this :content this _(set-focus :content this false))
-        
     )
-    (handle-base this input)
+    (let ((start-link _(link-resource this _)))
+        (handle-base this input)
+    )
 )
 
 (defmethod resource-published ((window Chat) resource)
