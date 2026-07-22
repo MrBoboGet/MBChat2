@@ -18,9 +18,13 @@ namespace MBChat2
 
     class Client : public std::enable_shared_from_this<Client>
     {
+        typedef MBUtility::MOFunction<void(std::string const& )> OnErrorCallback;
         std::mutex m_InternalsMutex;
         MBCLI::WindowManager m_TopWindow;
         MBTUI::Layerer m_TopLayerer;
+        MBTUI::Stacker m_LeftStacker;
+
+        std::vector<OnErrorCallback> m_ErrorCallbacks;
 
         MBCLI::MBTerminal m_Terminal;
         bool m_LayerHandleInput = false;
@@ -103,8 +107,10 @@ namespace MBChat2
         void AddVisualiser(std::string const& DatabaseType,
                 VisualiserFactory Factory);
         void AddCommand(std::string const& CommandName, CommandFunc Result);
+        void AddOnErrorCallback(OnErrorCallback Callback);
         void AddCommandCompletion(std::string const& CommandName, CompletionFunc Func);
         void DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow);
+        void MountWindow(MBUtility::SmartPtr<MBCLI::Window> TopWindow);
         void OpenDatabase(ID const& DatabaseID);
         void AddEvent(MBUtility::MOFunction<void()> Event);
 

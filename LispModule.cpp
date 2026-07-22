@@ -728,6 +728,15 @@ namespace MBChat2
                                 Evaluator->Eval(Val,std::move(CallArgs));
                             });
                 });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"add-on-error-callback",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::Value const& Val) mutable
+                {
+                    Client->AddOnErrorCallback([Val = Val,Evaluator=Evaluator](std::string const& String)
+                            {
+                                MBLisp::FuncArgVector CallArgs = {String};
+                                Evaluator->Eval(Val,std::move(CallArgs));
+                            });
+                });
         AssociatedEvaluator.AddFunctionObject(ReturnValue,"add-completion",
                 [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::String const& CommandName,MBLisp::Value const& Val) mutable
                 {
@@ -770,6 +779,20 @@ namespace MBChat2
                         Window = std::unique_ptr<MBCLI::Window>(std::make_unique<MBLisp::LispWindow>(Evaluator,Value));
                     }
                     Client->DisplayOverlay(std::move(Window));
+                });
+        AssociatedEvaluator.AddFunctionObject(ReturnValue,"mount-window",
+                [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::Value Value) mutable
+                {
+                    MBUtility::SmartPtr<MBCLI::Window> Window;
+                    if(Value.IsType<MBCLI::Window>())
+                    {
+                        Window = Value.GetSharedPtr<MBCLI::Window>();
+                    }
+                    else
+                    {
+                        Window = std::unique_ptr<MBCLI::Window>(std::make_unique<MBLisp::LispWindow>(Evaluator,Value));
+                    }
+                    Client->MountWindow(std::move(Window));
                 });
         AssociatedEvaluator.AddFunctionObject(ReturnValue,"display-db",
                 [Client=m_AssociatedClient,Evaluator=AssociatedEvaluator.shared_from_this()](MBLisp::String const& Val) mutable

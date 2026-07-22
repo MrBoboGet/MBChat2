@@ -3,6 +3,7 @@
 (import TML.file-picker)
 (import mbchat chat)
 (import text text)
+(import TML.toaster)
 
 
 
@@ -47,7 +48,9 @@
     (list)
 )
 
-
+(set error-handler @tml-emit <toaster visible-time=3000 border-color="red"></toaster>)
+(chat:mount-window error-handler)
+(chat:add-on-error-callback (lambda (err) (toast error-handler err)))
 
 (chat:add-command "open" open-command)
 (chat:add-completion "open" open-completion)

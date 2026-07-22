@@ -104,6 +104,10 @@ namespace MBChat2
                     {
                         m_TopWindow.HandleInput(Character);
                     }
+                    catch(MBLisp::UncaughtSignal const& e)
+                    {
+                        p_DisplayError(m_Evaluator->GetExceptionMessage(e));
+                    }
                     catch(std::exception const& e)
                     {
                         p_DisplayError(e.what());
@@ -145,19 +149,26 @@ namespace MBChat2
     {
         m_RegisteredCommands[CommandName] = std::move(Result);
     }
+    void Client::AddOnErrorCallback(OnErrorCallback Callback)
+    {
+        m_ErrorCallbacks.push_back(std::move(Callback));
+    }
     void Client::AddCommandCompletion(std::string const& CommandName, CompletionFunc Func)
     {
         m_RegisteredCompletions[CommandName] = std::move(Func);
     }
     void Client::DisplayOverlay(MBUtility::SmartPtr<MBCLI::Window> TopWindow)
     {
-
         if(m_LayerHandleInput)
         {
             throw std::runtime_error("Windows is already being displayed!");
         }
         m_LayerHandleInput = true;
         m_TopLayerer.AddLayer(std::move(TopWindow));
+    }
+    void Client::MountWindow(MBUtility::SmartPtr<MBCLI::Window> TopWindow)
+    {
+        m_LeftStacker.AddElement(std::move(TopWindow));
     }
     void Client::AddEvent(MBUtility::MOFunction<void()> Event)
     {
@@ -258,6 +269,10 @@ namespace MBChat2
                         NewPeer.ID = StringToID(MBUtility::HexStringToBytes(Tokens[3]));
                         m_ConnectionManager->AddConnection(std::move(NewPeer));
                     }
+                    catch(MBLisp::UncaughtSignal const& e)
+                    {
+                        p_DisplayError(m_Evaluator->GetExceptionMessage(e));
+                    }
                     catch(std::exception const& e)
                     {
                         p_DisplayError("Error in addpeer: "+std::string(e.what()));
@@ -275,6 +290,10 @@ namespace MBChat2
                     try
                     {
                         p_StartChat(StringToID(MBUtility::HexStringToBytes(Tokens[1])));
+                    }
+                    catch(MBLisp::UncaughtSignal const& e)
+                    {
+                        p_DisplayError(m_Evaluator->GetExceptionMessage(e));
                     }
                     catch(std::exception const& e)
                     {
@@ -308,6 +327,10 @@ namespace MBChat2
                                 });
                         Task.resume();
                     }
+                    catch(MBLisp::UncaughtSignal const& e)
+                    {
+                        p_DisplayError(m_Evaluator->GetExceptionMessage(e));
+                    }
                     catch(std::exception const& e)
                     {
                         p_DisplayError("Error in addpeer: "+std::string(e.what()));
@@ -329,6 +352,10 @@ namespace MBChat2
                     try
                     {
                         It->second(Args);
+                    }
+                    catch(MBLisp::UncaughtSignal const& e)
+                    {
+                        p_DisplayError(m_Evaluator->GetExceptionMessage(e));
                     }
                     catch(std::exception const& e)
                     {
@@ -375,6 +402,10 @@ namespace MBChat2
                 }
                 Client.p_AddVisualiser(NewDB);
             }
+            catch(MBLisp::UncaughtSignal const& e)
+            {
+                Client.p_DisplayError(Client.m_Evaluator->GetExceptionMessage(e));
+            }
             catch(std::exception const& e)
             {
                 Client.p_DisplayError(e.what());
@@ -386,7 +417,17 @@ namespace MBChat2
     }
     void Client::p_DisplayError(std::string const& ErrorMessage)
     {
-           
+        for(auto& Handler : m_ErrorCallbacks)
+        {
+            try
+            {
+                Handler(ErrorMessage);
+            }
+            catch(...)
+            {
+                   
+            }
+        }
     }
     void Client::p_AddVisualiser(DatabaseDefinition const& Database)
     {
@@ -622,10 +663,11 @@ namespace MBChat2
         auto RestWindow = MBTUI::BufferWindow(Rest);
 
         m_DBVisualiserWindow = std::make_shared<DBWindow>(this);
+        m_LeftStacker.AddElement((MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow)));
         //std::vector<MBCLI::WindowManager::WindowContainer> Windows;
         
         
-        m_TopWindow.AddWindow((MBUtility::SmartPtr( (MBCLI::Window*)&SideWindow)),MBCLI::WindowStretchInfo(-1,-1,12));
+        m_TopWindow.AddWindow(MBUtility::SmartPtr( (MBCLI::Window*)&m_LeftStacker),MBCLI::WindowStretchInfo(-1,-1,12));
         m_TopWindow.AddWindow((MBUtility::SmartPtr( std::static_pointer_cast<MBCLI::Window>(m_DBVisualiserWindow))));
         m_TopWindow.SetVertical(false);
         m_TopWindow.SetActiveWindowIndex(1);
@@ -660,6 +702,10 @@ namespace MBChat2
                         Event();
                     }
                 }
+                catch(MBLisp::UncaughtSignal const& e)
+                {
+                    p_DisplayError(m_Evaluator->GetExceptionMessage(e));
+                }
                 catch(std::exception const& e)
                 {
                     p_DisplayError(e.what());
@@ -672,6 +718,10 @@ namespace MBChat2
             try
             {
                 m_Terminal.WriteWindow(m_TopLayerer);
+            }
+            catch(MBLisp::UncaughtSignal const& e)
+            {
+                p_DisplayError(m_Evaluator->GetExceptionMessage(e));
             }
             catch(std::exception const& e)
             {
