@@ -18,6 +18,7 @@
 
 #include <coroutine>
 #include <optional>
+#include <deque>
 
 
 namespace MBChat2
@@ -475,7 +476,7 @@ namespace MBChat2
         uint32_t m_Port = 0;
         std::mutex m_RecieveMutex;
         std::condition_variable m_RecieveConditional;
-        std::vector<std::string> m_RecievedMessages;
+        std::deque<std::string> m_RecievedMessages;
         std::atomic<bool> m_Stopping{false};
     public:
         UDPHandlerPacketStream(UDPHandlerPacketStream&&) = delete;
@@ -489,7 +490,8 @@ namespace MBChat2
             m_Handler.RegisterTCPListener(m_ConnectionID,m_ClientIP,[this](std::string_view Data)
                     {
                         std::lock_guard Lock(m_RecieveMutex);
-                        m_RecievedMessages.push_back(std::string(Data));
+                        m_RecievedMessages.push_front(std::string(Data));
+                        m_RecieveConditional.notify_all();
                     });
         }
         virtual size_t ReadMaxPacketSize() override
@@ -511,10 +513,11 @@ namespace MBChat2
             {
                 return 0;   
             }
-            //order should not be important in these kind of applications
-            auto& CurrentPacket = m_RecievedMessages.back();
+            auto& CurrentPacket = m_RecievedMessages.front();
+            auto PacketSize = CurrentPacket.size();
             std::memcpy(OutBuffer,CurrentPacket.data(),std::min(BufferSize,CurrentPacket.size()));
-            return std::min(BufferSize,CurrentPacket.size());
+            m_RecievedMessages.pop_front();
+            return std::min(BufferSize,PacketSize);
         }
         virtual void WritePacket(const void* InBuffer,size_t BufferSize,double Timeout = -1) override
         {
@@ -523,6 +526,11 @@ namespace MBChat2
         ~UDPHandlerPacketStream()
         {
             m_Handler.RemoveTCPListener(m_ConnectionID,m_ClientIP);
+            m_Stopping.store(true);
+            {
+                std::lock_guard Lock(m_RecieveMutex);
+                m_RecieveConditional.notify_all();
+            }
         }
     };
 
