@@ -28,6 +28,7 @@ namespace MBChat2
         Notification,
         Request,
         Response,
+        TCPData,
     };
 
 
@@ -277,6 +278,7 @@ namespace MBChat2
         ParseVariant(Stream,Value,Type,MBUtility::TypeList<Args...>());
     }
 
+
     template<typename T>
     class UDPTaskQueue;
 
@@ -358,6 +360,11 @@ namespace MBChat2
         {
             MBUtility::MOFunction<void (UDPResponse const& Response)> Callback;
         };
+        struct TCPListener {
+            uint32_t ID = 0;
+            uint32_t ClientIP = 0;
+            MBUtility::MOFunction<void(std::string_view)> PacketRecievedCallback;
+        };
 
         MBUtility::ThreadPool m_RequestResponseRunner = MBUtility::ThreadPool(5);
 
@@ -365,8 +372,9 @@ namespace MBChat2
         std::atomic<bool> m_Stopping = false;
         std::atomic<uint32_t> m_NextMessageID;
         std::unordered_map<uint32_t,std::unordered_map<uint32_t,StoredCallback>> m_ResponseCallbacks;
+        std::unordered_map<uint32_t,std::unordered_map<uint32_t,TCPListener>> m_ActivePacketListeners;
         MBSockets::UDPSocket m_Socket;
-        MBUtility::ThreadPool m_ThreadPool = MBUtility::ThreadPool(1);
+        MBUtility::ThreadPool m_ThreadPool = MBUtility::ThreadPool(5);
 
         UDPNotificationHandler m_NotificationHandler;
         UDPRequestHandler m_RequestHandler;
@@ -455,7 +463,70 @@ namespace MBChat2
         }
         void SetNotificationHandler(UDPNotificationHandler Handler);
         void SetRequestHandler(UDPRequestHandler Handler);
+        void RegisterTCPListener(uint32_t ConnectionID,uint32_t ClientIP,MBUtility::MOFunction<void(std::string_view)>);
+        void RemoveTCPListener(uint32_t ConnectionID,uint32_t ClientIP);
+        void SendTCPPacket(uint32_t ConnectionID,uint32_t ClientIP,uint16_t Port,std::string_view Data);
     };
+    class UDPHandlerPacketStream : public MBUtility::BidirectionalPacketStream
+    {
+        UDPHandler& m_Handler;
+        uint32_t m_ConnectionID = 0;
+        uint32_t m_ClientIP = 0;
+        uint32_t m_Port = 0;
+        std::mutex m_RecieveMutex;
+        std::condition_variable m_RecieveConditional;
+        std::vector<std::string> m_RecievedMessages;
+        std::atomic<bool> m_Stopping{false};
+    public:
+        UDPHandlerPacketStream(UDPHandlerPacketStream&&) = delete;
+        UDPHandlerPacketStream(UDPHandlerPacketStream const&) = delete;
+        UDPHandlerPacketStream(UDPHandler& Handler,uint32_t ConnectionID, uint32_t ClientIP,uint16_t Port)
+            : m_Handler(Handler)
+        {
+            m_ConnectionID = ConnectionID;
+            m_ClientIP = ClientIP;
+            m_Port = Port;
+            m_Handler.RegisterTCPListener(m_ConnectionID,m_ClientIP,[this](std::string_view Data)
+                    {
+                        std::lock_guard Lock(m_RecieveMutex);
+                        m_RecievedMessages.push_back(std::string(Data));
+                    });
+        }
+        virtual size_t ReadMaxPacketSize() override
+        {
+            return 500-8;
+        }
+        virtual size_t WriteMaxPacketSize() override
+        {
+            return 500-8;
+        }
+        virtual size_t ReadPacket(void* OutBuffer,size_t BufferSize,double Timeout = -1) override
+        {
+            std::unique_lock Lock(m_RecieveMutex);
+            while(m_RecievedMessages.size() == 0 && !m_Stopping.load())
+            {
+                m_RecieveConditional.wait(Lock);   
+            }
+            if(m_Stopping.load())
+            {
+                return 0;   
+            }
+            //order should not be important in these kind of applications
+            auto& CurrentPacket = m_RecievedMessages.back();
+            std::memcpy(OutBuffer,CurrentPacket.data(),std::min(BufferSize,CurrentPacket.size()));
+            return std::min(BufferSize,CurrentPacket.size());
+        }
+        virtual void WritePacket(const void* InBuffer,size_t BufferSize,double Timeout = -1) override
+        {
+            m_Handler.SendTCPPacket(m_ConnectionID,m_ClientIP,m_Port,std::string_view((const char*)InBuffer,((const char*)InBuffer)+BufferSize));
+        }
+        ~UDPHandlerPacketStream()
+        {
+            m_Handler.RemoveTCPListener(m_ConnectionID,m_ClientIP);
+        }
+    };
+
+
     template<typename T>
     class UDPTaskQueue
     {

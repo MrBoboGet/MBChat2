@@ -8,6 +8,29 @@ namespace MBChat2
     {
         m_ListenThread = std::thread(&UDPHandler::p_ReadThread,this);
     }
+    void UDPHandler::RegisterTCPListener(uint32_t ConnectionID,uint32_t ClientIP,MBUtility::MOFunction<void(std::string_view)> Callback)
+    {
+        std::lock_guard Lock(m_StateMutex);
+        auto& Listener = m_ActivePacketListeners[ClientIP][ConnectionID] = TCPListener();
+        Listener.ID = ConnectionID;
+        Listener.ClientIP = ClientIP;
+        Listener.PacketRecievedCallback = std::move(Callback);
+    }
+    void UDPHandler::RemoveTCPListener(uint32_t ConnectionID,uint32_t ClientIP)
+    {
+        std::lock_guard Lock(m_StateMutex);
+        m_ActivePacketListeners[ClientIP].erase(m_ActivePacketListeners[ClientIP].find(ConnectionID));
+    }
+    void UDPHandler::SendTCPPacket(uint32_t ConnectionID,uint32_t ClientIP,uint16_t Port,std::string_view Data)
+    {
+        std::string DataToSend;
+        DataToSend.reserve(8+Data.size());
+        MBUtility::MBStringOutputStream OutStream(DataToSend);
+        OutStream & UDPMessageType::TCPData;
+        OutStream & ConnectionID;
+        OutStream << Data;
+        m_Socket.UDPSendData(DataToSend.data(),DataToSend.size(),ClientIP,Port);
+    }
     void UDPHandler::p_SendMessage(StoredMessage const& MessageToSend)
     {
         m_Socket.UDPSendData(MessageToSend.SerializedContent.data(),MessageToSend.SerializedContent.size(),MessageToSend.IP,MessageToSend.Port);
@@ -93,6 +116,22 @@ namespace MBChat2
                                     }
                                 });
 
+                    }
+                    else if(Type == UDPMessageType::TCPData)
+                    {
+                        auto ClientIt = m_ActivePacketListeners.find(Location.IP);
+                        if(ClientIt == m_ActivePacketListeners.end())
+                        {
+                             continue;   
+                        }
+                        auto ListenerIt = ClientIt->second.find(ID);
+                        if(ListenerIt == ClientIt->second.end())
+                        {
+                            continue;
+                        }
+                        //thread pool perhaps?
+                        auto Offset = sizeof(UDPMessageType)+sizeof(uint32_t);
+                        ListenerIt->second.PacketRecievedCallback(std::string_view(Buffer.data()+Offset,Buffer.data()+RequestSize));
                     }
                     else if(Type == UDPMessageType::Response)
                     {

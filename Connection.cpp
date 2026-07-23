@@ -898,9 +898,10 @@ namespace MBChat2
                 }
                 if(ConnectionResponse.HostPort == 0)
                 {
-                    std::unique_ptr<MBSockets::UDPSocket> UDPStream = std::make_unique<MBSockets::UDPSocket>(Params.IP,Params.PeerPort,0);
-                    Params.LocalPort = UDPStream->GetBoundPort();
-                    ConnectionResponse.HostPort = UDPStream->GetBoundPort();
+                    std::unique_ptr<MBUtility::BidirectionalPacketStream> UDPStream = 
+                        std::make_unique<UDPHandlerPacketStream>(*UDP,ConnectionRequset.ConnectionID,Location.IP,Location.Port);
+                    Params.LocalPort = HostInfo.ListeningPort;
+                    ConnectionResponse.HostPort = Params.LocalPort;
                     PeerInfo Peer;
                     Peer.ListeningPort = Params.PeerRegularPort;
                     Peer.ID = ConnectionRequset.HostInfo.ID.Content;

@@ -483,9 +483,11 @@ namespace MBChat2
                 }
             }
             m_Request.HostInfo = m_State->HostInfo;
-            std::unique_ptr<MBSockets::UDPSocket> m_UDPConnection = std::make_unique<MBSockets::UDPSocket>(TargetPeer.IP,0,0);
-            m_Request.HostPort = m_UDPConnection->GetBoundPort();
-            m_Request.ConnectionID = m_State->NextConnectionID.fetch_add(1);
+            auto ConnectionID = m_State->NextConnectionID.fetch_add(1);
+            std::unique_ptr<MBUtility::BidirectionalPacketStream> m_UDPConnection = 
+                std::make_unique<UDPHandlerPacketStream>(*m_State->UDP,ConnectionID,TargetPeer.IP,TargetPeer.ListeningPort);
+            m_Request.HostPort = m_State->HostInfo.ListeningPort;
+            m_Request.ConnectionID = ConnectionID;
 
             std::shared_ptr<Connection> m_ResultConnection;
             auto Result = co_await m_State->UDP->SendRequest(TargetPeer,m_Request);
@@ -499,9 +501,8 @@ namespace MBChat2
             Params.PeerPort = AcceptedConnection.second.HostPort;
             Params.LocalPort = m_Request.HostPort;
             Params.PeerID.Content = IDToString(TargetPeer.ID.Content);
-            m_UDPConnection->SetDstPort(AcceptedConnection.second.HostPort);
             auto NewConnection = std::make_shared<Connection>(
-                    std::unique_ptr<MBUtility::BidirectionalPacketStream>(std::move(m_UDPConnection)) ,
+                    std::move(m_UDPConnection),
                     std::move(Params),
                     TargetPeer,
                     m_Request.ConnectionID,
