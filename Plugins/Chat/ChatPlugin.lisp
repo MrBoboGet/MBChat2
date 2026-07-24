@@ -96,7 +96,7 @@
              else
                 (set-children :status file (list 
                     @tml-emit
-                    <stacker width="100%" direction="right" justification="between">
+                    <stacker width="90%" direction="right" justification="between">
                         <Text content=(get-status-string file)/>
                         <loadingBar percent=(chat:download-percent :observer file) />
                     </stacker>

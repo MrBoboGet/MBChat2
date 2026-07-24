@@ -490,7 +490,7 @@ namespace MBChat2
             m_Handler.RegisterTCPListener(m_ConnectionID,m_ClientIP,[this](std::string_view Data)
                     {
                         std::lock_guard Lock(m_RecieveMutex);
-                        m_RecievedMessages.push_front(std::string(Data));
+                        m_RecievedMessages.push_back(std::string(Data));
                         m_RecieveConditional.notify_all();
                     });
         }
